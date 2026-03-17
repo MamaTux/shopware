@@ -43,6 +43,7 @@
     "requiredFields": "Die mit einem Stern (*) markierten Felder sind Pflichtfelder.",
     "privacyTitle": "Datenschutz",
     "privacyNoticeTextModal": "Ich habe die %privacyModalTagOpen%Datenschutzbestimmungen%privacyModalTagClose% zur Kenntnis genommen und die %tosModalTagOpen%AGB%tosModalTagClose% gelesen und bin mit ihnen einverstanden.",
+    "privacyNoticeTextPage": "Ich habe die <a href=\"%privacyUrl%\">Datenschutzbestimmungen</a> zur Kenntnis genommen und die <a href=\"%tosUrl%\">AGB</a> gelesen und bin mit ihnen einverstanden.",
     "privacyNoticeInformation": "Bitte beachten Sie unsere %privacyModalTagOpen%Datenschutzbestimmungen%privacyModalTagClose% und %tosModalTagOpen%AGB%tosModalTagClose%.",
     "privacyLink": "Datenschutz",
     "imprintLink": "Impressum",
