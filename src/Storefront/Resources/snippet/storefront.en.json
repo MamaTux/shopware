@@ -42,8 +42,8 @@
     "required": "*",
     "requiredFields": "Fields marked with asterisks (*) are required.",
     "privacyTitle": "Privacy",
-    "privacyNoticeText": "Please note our %privacyModalTagOpen%data protection information%privacyModalTagClose% and %tosModalTagOpen%general terms and conditions%tosModalTagClose%.",
     "privacyNoticeTextModal": "By selecting continue you confirm that you have read our %privacyModalTagOpen%data protection information%privacyModalTagClose% and accepted our %tosModalTagOpen%general terms and conditions%tosModalTagClose%.",
+    "privacyNoticeInformation": "Please note our %privacyModalTagOpen%data protection information%privacyModalTagClose% and %tosModalTagOpen%general terms and conditions%tosModalTagClose%.",
     "privacyLink": "Privacy policy",
     "imprintLink": "Imprint",
     "404ErrorPageHeader": "Page not found",
@@ -611,6 +611,8 @@
     "subjectPlaceholder": "Enter subject...",
     "commentLabel": "Comment",
     "commentPlaceholder": "Enter comment...",
+    "privacyNoticeTextModal": "By selecting continue you confirm that you have read and agree to our %privacyModalTagOpen%data protection information%privacyModalTagClose%.",
+    "privacyNoticeTextPage": "By selecting continue you confirm that you have read and agree to our <a href=\"%privacyUrl%\" title=\"Data protection information\">data protection information</a>.",
     "formSubmit": "Submit",
     "success": "We have received your contact request and will process it as soon as possible."
   },
