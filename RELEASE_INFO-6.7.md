@@ -11,6 +11,10 @@ These are optional and can be enabled via `shopware.api.rate_limiter` in `shopwa
 
 ## Core
 
+### `ProductStreamProcessor` constructor now requires `SystemConfigService`
+
+`Shopware\Core\Content\Product\Cms\ProductSlider\ProductStreamProcessor` now takes an additional `SystemConfigService` argument so stream-backed CMS product sliders can honour the `core.listing.hideCloseoutProductsWhenOutOfStock` setting (mirroring the manual-products slider). Plugins that extend the service and call `parent::__construct(...)` must pass the new argument; when declaring the service in XML, add an `<argument type="service" id="Shopware\Core\System\SystemConfig\SystemConfigService"/>` after the existing ones.
+
 ### Product `display_group` values use SHA-256
 
 The `display_group` field on the `product` entity (available via the Admin API and Store API) is now computed with SHA-256 for variant listing instead of MD5.
