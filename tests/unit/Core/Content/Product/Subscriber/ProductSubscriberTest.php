@@ -14,6 +14,7 @@ use Shopware\Core\Content\MeasurementSystem\Unit\AbstractMeasurementUnitConverte
 use Shopware\Core\Content\MeasurementSystem\Unit\ConvertedUnit;
 use Shopware\Core\Content\MeasurementSystem\Unit\ConvertedUnitSet;
 use Shopware\Core\Content\Product\AbstractPropertyGroupSorter;
+use Shopware\Core\Content\Product\DataAbstractionLayer\CheapestPrice\CheapestPrice;
 use Shopware\Core\Content\Product\DataAbstractionLayer\CheapestPrice\CheapestPriceContainer;
 use Shopware\Core\Content\Product\IsNewDetector;
 use Shopware\Core\Content\Product\ProductDefinition;
@@ -34,6 +35,7 @@ use Shopware\Core\Framework\DataAbstractionLayer\Event\EntityDeleteEvent;
 use Shopware\Core\Framework\DataAbstractionLayer\Event\EntityLoadedEvent;
 use Shopware\Core\Framework\DataAbstractionLayer\Event\EntityWriteEvent;
 use Shopware\Core\Framework\DataAbstractionLayer\PartialEntity;
+use Shopware\Core\Framework\DataAbstractionLayer\Pricing\Price;
 use Shopware\Core\Framework\DataAbstractionLayer\Write\Command\WriteCommand;
 use Shopware\Core\Framework\Uuid\Uuid;
 use Shopware\Core\PlatformRequest;
@@ -238,6 +240,93 @@ class ProductSubscriberTest extends TestCase
         );
 
         $subscriber->salesChannelLoaded($event);
+    }
+
+    /**
+     * Regression for #16239: when `core.listing.hideCloseoutProductsWhenOutOfStock`
+     * is enabled, the subscriber must resolve the cheapest price while hiding
+     * closeout variants that are out of stock, so listings never display a
+     * "from" price for a variant the customer can never purchase.
+     */
+    public function testSalesChannelLoadedSkipsUnavailableCloseoutVariantInCheapestPriceAggregation(): void
+    {
+        $salesChannelId = Uuid::randomHex();
+        $parentId = Uuid::randomHex();
+        $hiddenVariantId = Uuid::randomHex();
+        $availableVariantId = Uuid::randomHex();
+
+        $cheapestPrice = new CheapestPriceContainer([
+            $hiddenVariantId => [
+                'default' => [
+                    'price' => [
+                        ['currencyId' => Defaults::CURRENCY, 'gross' => 50.0, 'net' => 42.02, 'linked' => true],
+                    ],
+                    'sales_channel_ids' => [$salesChannelId],
+                    'is_ranged' => false,
+                    'rule_id' => 'default',
+                    'parent_id' => $parentId,
+                    'purchase_unit' => 1.0,
+                    'reference_unit' => 1.0,
+                    'is_closeout' => true,
+                    'available' => false,
+                ],
+            ],
+            $availableVariantId => [
+                'default' => [
+                    'price' => [
+                        ['currencyId' => Defaults::CURRENCY, 'gross' => 100.0, 'net' => 84.03, 'linked' => true],
+                    ],
+                    'sales_channel_ids' => [$salesChannelId],
+                    'is_ranged' => false,
+                    'rule_id' => 'default',
+                    'parent_id' => $parentId,
+                    'purchase_unit' => 1.0,
+                    'reference_unit' => 1.0,
+                    'is_closeout' => false,
+                    'available' => true,
+                ],
+            ],
+        ]);
+
+        $entity = (new SalesChannelProductEntity())->assign([
+            'id' => $parentId,
+            'cheapestPrice' => $cheapestPrice,
+        ]);
+
+        $salesChannelContext = $this->createMock(SalesChannelContext::class);
+        $salesChannelContext->method('getSalesChannelId')->willReturn($salesChannelId);
+        $salesChannelContext->method('getContext')->willReturn(Context::createDefaultContext());
+
+        $subscriber = new ProductSubscriber(
+            $this->createMock(ProductVariationBuilder::class),
+            $this->createMock(AbstractProductPriceCalculator::class),
+            $this->createMock(AbstractPropertyGroupSorter::class),
+            $this->createMock(ProductMaxPurchaseCalculator::class),
+            $this->createMock(IsNewDetector::class),
+            new StaticSystemConfigService([
+                'core.listing.hideCloseoutProductsWhenOutOfStock' => true,
+            ]),
+            $this->createMock(ProductMeasurementUnitBuilder::class),
+            $this->createMock(AbstractMeasurementUnitConverter::class),
+            new RequestStack(),
+            $this->createMock(Connection::class)
+        );
+
+        /** @var SalesChannelEntityLoadedEvent<ProductEntity|PartialEntity> $event */
+        $event = new SalesChannelEntityLoadedEvent(
+            $this->createMock(SalesChannelProductDefinition::class),
+            [$entity],
+            $salesChannelContext
+        );
+
+        $subscriber->salesChannelLoaded($event);
+
+        $resolved = $entity->get('cheapestPrice');
+        static::assertInstanceOf(CheapestPrice::class, $resolved);
+        static::assertSame($availableVariantId, $resolved->getVariantId());
+        $firstPrice = $resolved->getPrice()->first();
+        static::assertInstanceOf(Price::class, $firstPrice);
+        static::assertSame(100.0, $firstPrice->getGross());
     }
 
     public function testEnsurePartialsEventsConsidered(): void
