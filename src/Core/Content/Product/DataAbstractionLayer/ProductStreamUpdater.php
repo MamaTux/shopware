@@ -30,6 +30,8 @@ use Symfony\Component\Messenger\MessageBusInterface;
 #[Package('framework')]
 class ProductStreamUpdater extends AbstractProductStreamUpdater
 {
+    public const INDEXER_NAME = 'product_stream_mapping.indexer';
+
     /**
      * @internal
      *
@@ -47,7 +49,7 @@ class ProductStreamUpdater extends AbstractProductStreamUpdater
 
     public function getName(): string
     {
-        return 'product_stream_mapping.indexer';
+        return self::INDEXER_NAME;
     }
 
     public function iterate(?array $offset): ?EntityIndexingMessage
