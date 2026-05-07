@@ -125,15 +125,6 @@ class ServiceExceptionTest extends TestCase
         static::assertSame('Service is not allowed to toggle itself.', $e->getMessage());
     }
 
-    public function testMissingAppSecretInfo(): void
-    {
-        $e = ServiceException::missingAppSecretInfo('app-123');
-
-        static::assertSame(Response::HTTP_BAD_REQUEST, $e->getStatusCode());
-        static::assertSame(ServiceException::SERVICE_MISSING_APP_SECRET_INFO, $e->getErrorCode());
-        static::assertSame('Error creating client. The app secret information was missing. App ID: "app-123"', $e->getMessage());
-    }
-
     public function testScheduledTaskNotRegistered(): void
     {
         $e = ServiceException::scheduledTaskNotRegistered();

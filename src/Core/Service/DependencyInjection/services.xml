@@ -52,8 +52,6 @@
             <argument type="service" id="Symfony\Contracts\HttpClient\HttpClientInterface"/>
             <argument type="service" id="Shopware\Core\Service\ServiceRegistry\Client"/>
             <argument>%kernel.shopware_version%</argument>
-            <argument type="service" id="shopware.app_system.guzzle.middleware"/>
-            <argument type="service" id="Shopware\Core\Framework\App\Payload\AppPayloadServiceHelper"/>
         </service>
 
         <service id="Shopware\Core\Service\AllServiceInstaller">
@@ -121,12 +119,8 @@
             <argument>%kernel.project_dir%</argument>
         </service>
 
-        <service id="Shopware\Core\Service\Subscriber\LicenseSyncSubscriber">
+        <service id="Shopware\Core\Service\Subscriber\LicenseProviderSubscriber">
             <argument type="service" id="Shopware\Core\System\SystemConfig\SystemConfigService"/>
-            <argument type="service" id="Shopware\Core\Service\ServiceRegistry\Client"/>
-            <argument type="service" id="app.repository"/>
-            <argument type="service" id="logger"/>
-            <argument type="service" id="Shopware\Core\Service\ServiceClientFactory"/>
             <argument type="service" id="event_dispatcher"/>
 
             <tag name="kernel.event_subscriber"/>
