@@ -14,6 +14,8 @@ use Shopware\Core\Content\Product\Cms\ProductSlider\ProductStreamProcessor;
 use Shopware\Core\Content\Product\Events\ProductSliderStreamCriteriaEvent;
 use Shopware\Core\Content\Product\ProductCollection;
 use Shopware\Core\Content\Product\ProductDefinition;
+use Shopware\Core\Content\Product\SalesChannel\ProductCloseoutFilter;
+use Shopware\Core\Content\Product\SalesChannel\ProductCloseoutFilterFactory;
 use Shopware\Core\Content\ProductStream\Service\ProductStreamBuilderInterface;
 use Shopware\Core\Framework\Context;
 use Shopware\Core\Framework\DataAbstractionLayer\Search\Criteria;
@@ -106,6 +108,62 @@ class ProductStreamProcessorTest extends TestCase
         $groupingFilter = new NotEqualsFilter('displayGroup', null);
 
         static::assertEquals($groupingFilter, $filter);
+    }
+
+    public function testCollectAddsCloseoutFilterToCriteriaWhenHideCloseoutEnabled(): void
+    {
+        $slot = $this->getSlot();
+        $resolverContext = $this->getResolverContext();
+
+        $config = new FieldConfig('products', FieldConfig::SOURCE_PRODUCT_STREAM, 'product-stream-1');
+        $this->config->add($config);
+
+        $this->systemConfigService->expects($this->once())
+            ->method('getBool')
+            ->with('core.listing.hideCloseoutProductsWhenOutOfStock', $resolverContext->getSalesChannelContext()->getSalesChannelId())
+            ->willReturn(true);
+
+        $collection = $this->getProcessor()->collect($slot, $this->config, $resolverContext);
+        static::assertInstanceOf(CriteriaCollection::class, $collection);
+
+        $criteria = $collection->all()[ProductDefinition::class]['product-slider-entity-fallback_id'] ?? null;
+        static::assertInstanceOf(Criteria::class, $criteria);
+
+        $closeoutFilters = array_filter(
+            $criteria->getFilters(),
+            static fn ($filter) => $filter instanceof ProductCloseoutFilter
+        );
+        static::assertCount(
+            1,
+            $closeoutFilters,
+            'Closeout filter must be part of the stream criteria so hidden products do not consume the slider limit'
+        );
+    }
+
+    public function testCollectDoesNotAddCloseoutFilterToCriteriaWhenHideCloseoutDisabled(): void
+    {
+        $slot = $this->getSlot();
+        $resolverContext = $this->getResolverContext();
+
+        $config = new FieldConfig('products', FieldConfig::SOURCE_PRODUCT_STREAM, 'product-stream-1');
+        $this->config->add($config);
+
+        $this->systemConfigService->expects($this->once())
+            ->method('getBool')
+            ->with('core.listing.hideCloseoutProductsWhenOutOfStock', $resolverContext->getSalesChannelContext()->getSalesChannelId())
+            ->willReturn(false);
+
+        $collection = $this->getProcessor()->collect($slot, $this->config, $resolverContext);
+        static::assertInstanceOf(CriteriaCollection::class, $collection);
+
+        $criteria = $collection->all()[ProductDefinition::class]['product-slider-entity-fallback_id'] ?? null;
+        static::assertInstanceOf(Criteria::class, $criteria);
+
+        $closeoutFilters = array_filter(
+            $criteria->getFilters(),
+            static fn ($filter) => $filter instanceof ProductCloseoutFilter
+        );
+        static::assertCount(0, $closeoutFilters);
     }
 
     public function testCollectEventCanModifyCriteria(): void
@@ -313,6 +371,7 @@ class ProductStreamProcessorTest extends TestCase
             $this->productRepository,
             $this->eventDispatcher,
             $this->systemConfigService,
+            new ProductCloseoutFilterFactory(),
         );
     }
 
