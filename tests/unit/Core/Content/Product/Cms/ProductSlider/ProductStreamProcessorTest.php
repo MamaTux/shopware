@@ -5,6 +5,7 @@ namespace Shopware\Tests\Unit\Core\Content\Product\Cms\ProductSlider;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\LoggerInterface;
 use Shopware\Core\Content\Cms\DataResolver\CriteriaCollection;
 use Shopware\Core\Content\Cms\DataResolver\Element\ElementDataCollection;
 use Shopware\Core\Content\Cms\DataResolver\FieldConfig;
@@ -18,6 +19,7 @@ use Shopware\Core\Content\Product\SalesChannel\ProductCloseoutFilter;
 use Shopware\Core\Content\Product\SalesChannel\ProductCloseoutFilterFactory;
 use Shopware\Core\Content\ProductStream\Service\ProductStreamBuilderInterface;
 use Shopware\Core\Framework\Context;
+use Shopware\Core\Framework\DataAbstractionLayer\Exception\EntityNotFoundException;
 use Shopware\Core\Framework\DataAbstractionLayer\Search\Criteria;
 use Shopware\Core\Framework\DataAbstractionLayer\Search\EntitySearchResult;
 use Shopware\Core\Framework\DataAbstractionLayer\Search\Filter\ContainsFilter;
@@ -52,6 +54,8 @@ class ProductStreamProcessorTest extends TestCase
 
     private EventDispatcherInterface&MockObject $eventDispatcher;
 
+    private LoggerInterface&MockObject $logger;
+
     private SystemConfigService&MockObject $systemConfigService;
 
     protected function setUp(): void
@@ -61,6 +65,7 @@ class ProductStreamProcessorTest extends TestCase
 
         $this->productRepository = $this->createMock(SalesChannelRepository::class);
         $this->eventDispatcher = $this->createMock(EventDispatcherInterface::class);
+        $this->logger = $this->createMock(LoggerInterface::class);
         $this->systemConfigService = $this->createMock(SystemConfigService::class);
         $this->config = new FieldConfigCollection();
     }
@@ -189,6 +194,38 @@ class ProductStreamProcessorTest extends TestCase
         $criteria = $list[ProductDefinition::class]['product-slider-entity-fallback_id'] ?? null;
         static::assertInstanceOf(Criteria::class, $criteria);
         static::assertTrue($criteria->hasAssociation('manufacturer'));
+    }
+
+    public function testCollectReturnsNullWhenProductStreamNoLongerExists(): void
+    {
+        $slot = $this->getSlot();
+        $resolverContext = $this->getResolverContext();
+
+        $config = new FieldConfig('products', FieldConfig::SOURCE_PRODUCT_STREAM, 'deleted-product-stream-id');
+        $this->config->add($config);
+
+        $exception = new EntityNotFoundException('product_stream', 'deleted-product-stream-id');
+
+        $this->productStreamBuilder = $this->createMock(ProductStreamBuilderInterface::class);
+        $this->productStreamBuilder->expects($this->once())
+            ->method('buildFilters')
+            ->with('deleted-product-stream-id', $resolverContext->getSalesChannelContext()->getContext())
+            ->willThrowException($exception);
+
+        $this->logger->expects($this->once())
+            ->method('warning')
+            ->with(
+                'Product stream configured for CMS product slider could not be found.',
+                [
+                    'productStreamId' => 'deleted-product-stream-id',
+                    'exception' => $exception,
+                ]
+            );
+
+        $this->eventDispatcher->expects($this->never())
+            ->method('dispatch');
+
+        static::assertNull($this->getProcessor()->collect($slot, $this->config, $resolverContext));
     }
 
     public function testCollectAddsRandomSortingIfRequired(): void
@@ -370,6 +407,7 @@ class ProductStreamProcessorTest extends TestCase
             $this->productStreamBuilder,
             $this->productRepository,
             $this->eventDispatcher,
+            $this->logger,
             $this->systemConfigService,
             new ProductCloseoutFilterFactory(),
         );
