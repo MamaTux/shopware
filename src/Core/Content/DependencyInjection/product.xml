@@ -187,6 +187,15 @@
             <tag name="kernel.event_subscriber"/>
         </service>
 
+        <service id="Shopware\Core\Content\Product\Subscriber\CheapestPriceAvailabilitySubscriber">
+            <argument type="service" id="Doctrine\DBAL\Connection"/>
+            <argument type="service" id="Shopware\Core\Framework\DataAbstractionLayer\Indexing\EntityIndexerRegistry"/>
+            <argument type="service" id="messenger.default_bus"/>
+
+            <tag name="kernel.event_subscriber"/>
+            <tag name="kernel.reset" method="reset"/>
+        </service>
+
         <service id="Shopware\Core\Content\Product\DataAbstractionLayer\ProductDescriptionTeaserBuilder">
             <argument type="service" id="Shopware\Core\Framework\Util\HtmlSanitizer"/>
         </service>
