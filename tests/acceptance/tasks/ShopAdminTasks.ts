@@ -40,11 +40,17 @@ import { CreateDocument } from '@tasks/ShopAdmin/Orders/CreateDocumentViaAPI';
  * Rules
  */
 import { CreateRuleBillingCountry } from '@tasks/ShopAdmin/RuleBuilder/CreateRuleBillingCountry';
+import { CreateRuleNewsletterRecipient } from '@tasks/ShopAdmin/RuleBuilder/CreateRuleNewsletterRecipient';
 
 /**
  * Flows
  */
 import { CreateFlowForValidation } from '@tasks/ShopAdmin/FlowBuilder/CreateFlowForValidation';
+
+/**
+ * Marketing
+ */
+import { AddPromotionWithConditionRule } from '@tasks/ShopAdmin/Marketing/CreatePromotionWithConditionRule';
 
 export const test = mergeTests(
     GenerateVariants,
@@ -56,5 +62,7 @@ export const test = mergeTests(
     AddCreditItem,
     CreateDocument,
     CreateRuleBillingCountry,
+    CreateRuleNewsletterRecipient,
     CreateFlowForValidation,
+    AddPromotionWithConditionRule,
 );
