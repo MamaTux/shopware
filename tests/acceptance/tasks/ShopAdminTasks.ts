@@ -47,11 +47,6 @@ import { CreateRuleNewsletterRecipient } from '@tasks/ShopAdmin/RuleBuilder/Crea
  */
 import { CreateFlowForValidation } from '@tasks/ShopAdmin/FlowBuilder/CreateFlowForValidation';
 
-/**
- * Marketing
- */
-import { AddPromotionWithConditionRule } from '@tasks/ShopAdmin/Marketing/CreatePromotionWithConditionRule';
-
 export const test = mergeTests(
     GenerateVariants,
     UploadImage,
@@ -64,5 +59,4 @@ export const test = mergeTests(
     CreateRuleBillingCountry,
     CreateRuleNewsletterRecipient,
     CreateFlowForValidation,
-    AddPromotionWithConditionRule,
 );
