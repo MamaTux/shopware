@@ -51,6 +51,9 @@
         <service id="Shopware\Core\Framework\Webhook\Service\WebhookHealthService">
             <argument type="service" id="Doctrine\DBAL\Connection"/>
             <argument type="service" id="Shopware\Core\Framework\Webhook\Service\RelatedWebhooks"/>
+            <argument type="service" id="Shopware\Core\Framework\Webhook\Outbox\WebhookOutboxStore"/>
+            <argument type="service" id="Shopware\Core\Framework\Webhook\Health\HealthConfig"/>
+            <argument type="service" id="Symfony\Component\Clock\ClockInterface"/>
         </service>
 
         <service id="Shopware\Core\Framework\Webhook\Transport\MySQLWebhookReceiver">
@@ -65,7 +68,15 @@
             <argument type="service" id="Shopware\Core\Framework\Webhook\Outbox\WebhookOutboxStore"/>
             <argument type="service_closure" id="messenger.transport.async"/>
             <argument type="service_closure" id="Shopware\Core\Framework\Webhook\Transport\MySQLWebhookReceiver"/>
+            <argument type="service" id="Shopware\Core\Framework\Webhook\Health\WebhookHealthTick"/>
             <tag name="messenger.transport_factory"/>
+        </service>
+
+        <service id="Shopware\Core\Framework\Webhook\Health\WebhookHealthTick">
+            <argument type="service" id="Shopware\Core\Framework\Adapter\Storage\AbstractKeyValueStorage"/>
+            <argument type="service" id="Symfony\Component\Clock\ClockInterface"/>
+            <argument type="service" id="logger"/>
+            <argument type="service" id="Shopware\Core\Framework\Webhook\Service\WebhookHealthService"/>
         </service>
 
         <service id="Shopware\Core\Framework\Webhook\Command\WebhookDrainToAsyncCommand">
@@ -88,6 +99,7 @@
             <argument>%shopware.admin_worker.enable_admin_worker%</argument>
             <argument type="service" id="Shopware\Core\Framework\Webhook\Service\WebhookDeliveryService"/>
             <argument type="service" id="Shopware\Core\Framework\Webhook\Outbox\WebhookOutboxStore"/>
+            <argument type="service" id="Shopware\Core\Framework\Webhook\Service\WebhookHealthService"/>
         </service>
 
         <service id="Shopware\Core\Framework\Webhook\WebhookCacheClearer">
@@ -150,6 +162,7 @@
             <argument type="service" id="Symfony\Component\Messenger\MessageBusInterface"/>
             <argument type="service" id="Shopware\Core\Framework\Webhook\Service\WebhookHealthService"/>
             <argument type="service" id="logger"/>
+            <argument type="service" id="Shopware\Core\Framework\Webhook\Health\HttpErrorClassifier"/>
             <argument>%shopware.admin_worker.enable_admin_worker%</argument>
             <argument>%shopware.webhook.failure_strategy%</argument>
         </service>
@@ -191,5 +204,12 @@
             <argument type="service" id="Shopware\Core\Framework\Webhook\Service\WebhookCleanup"/>
             <tag name="messenger.message_handler"/>
         </service>
+
+        <service id="Shopware\Core\Framework\Webhook\Health\HealthConfig">
+            <argument>%shopware.webhook.health.cooldown_schedule_seconds%</argument>
+            <argument>%shopware.webhook.health.degraded_threshold_count%</argument>
+        </service>
+
+        <service id="Shopware\Core\Framework\Webhook\Health\HttpErrorClassifier"/>
     </services>
 </container>

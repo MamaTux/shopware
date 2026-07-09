@@ -22,6 +22,7 @@ use Shopware\Core\Framework\Test\TestCaseBase\QueueTestBehaviour;
 use Shopware\Core\Framework\Util\Hasher;
 use Shopware\Core\Framework\Uuid\Uuid;
 use Shopware\Core\Framework\Webhook\EventLog\WebhookEventLogDefinition;
+use Shopware\Core\Framework\Webhook\Health\HttpErrorClassifier;
 use Shopware\Core\Framework\Webhook\Hookable\HookableEventFactory;
 use Shopware\Core\Framework\Webhook\Message\WebhookEventMessage;
 use Shopware\Core\Framework\Webhook\Outbox\RetryDelayCalculator;
@@ -925,6 +926,7 @@ class WebhookDispatchEndToEndTest extends TestCase
             static::getContainer()->get('messenger.default_bus'),
             static::getContainer()->get(WebhookHealthService::class),
             static::getContainer()->get('logger'),
+            new HttpErrorClassifier(),
             $isAdminWorkerEnabled,
         );
 
@@ -941,6 +943,7 @@ class WebhookDispatchEndToEndTest extends TestCase
             $isAdminWorkerEnabled,
             $deliveryService,
             static::getContainer()->get(WebhookOutboxStore::class),
+            static::getContainer()->get(WebhookHealthService::class),
         );
     }
 

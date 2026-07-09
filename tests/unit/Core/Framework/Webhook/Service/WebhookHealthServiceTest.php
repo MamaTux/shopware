@@ -7,9 +7,12 @@ use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Shopware\Core\Framework\Context;
 use Shopware\Core\Framework\Uuid\Uuid;
+use Shopware\Core\Framework\Webhook\Health\HealthConfig;
+use Shopware\Core\Framework\Webhook\Outbox\WebhookOutboxStore;
 use Shopware\Core\Framework\Webhook\Service\RelatedWebhooks;
 use Shopware\Core\Framework\Webhook\Service\WebhookHealthService;
 use Shopware\Core\Framework\Webhook\WebhookFailureStrategy;
+use Symfony\Component\Clock\MockClock;
 
 /**
  * @internal
@@ -28,8 +31,8 @@ class WebhookHealthServiceTest extends TestCase
         $relatedWebhooks->expects($this->never())
             ->method('updateRelated');
 
-        $service = new WebhookHealthService($connection, $relatedWebhooks);
-        $service->recordFailure(Uuid::randomHex(), WebhookFailureStrategy::DisableOnThreshold);
+        $service = $this->createService($connection, $relatedWebhooks);
+        $service->recordLegacyFailure(Uuid::randomHex(), WebhookFailureStrategy::DisableOnThreshold);
     }
 
     public function testRecordTerminalFailureIsNoOpWhenWebhookInactive(): void
@@ -43,8 +46,8 @@ class WebhookHealthServiceTest extends TestCase
         $relatedWebhooks->expects($this->never())
             ->method('updateRelated');
 
-        $service = new WebhookHealthService($connection, $relatedWebhooks);
-        $service->recordFailure(Uuid::randomHex(), WebhookFailureStrategy::DisableOnThreshold);
+        $service = $this->createService($connection, $relatedWebhooks);
+        $service->recordLegacyFailure(Uuid::randomHex(), WebhookFailureStrategy::DisableOnThreshold);
     }
 
     public function testRecordTerminalFailureIncrementsBelowThreshold(): void
@@ -65,8 +68,8 @@ class WebhookHealthServiceTest extends TestCase
                 static::isInstanceOf(Context::class)
             );
 
-        $service = new WebhookHealthService($connection, $relatedWebhooks);
-        $service->recordFailure($webhookId, WebhookFailureStrategy::DisableOnThreshold);
+        $service = $this->createService($connection, $relatedWebhooks);
+        $service->recordLegacyFailure($webhookId, WebhookFailureStrategy::DisableOnThreshold);
     }
 
     public function testRecordTerminalFailureDeactivatesAtThresholdWithDisableStrategy(): void
@@ -87,8 +90,8 @@ class WebhookHealthServiceTest extends TestCase
                 static::isInstanceOf(Context::class)
             );
 
-        $service = new WebhookHealthService($connection, $relatedWebhooks);
-        $service->recordFailure($webhookId, WebhookFailureStrategy::DisableOnThreshold);
+        $service = $this->createService($connection, $relatedWebhooks);
+        $service->recordLegacyFailure($webhookId, WebhookFailureStrategy::DisableOnThreshold);
     }
 
     public function testRecordTerminalFailureKeepsActiveWithIgnoreStrategyAboveThreshold(): void
@@ -109,8 +112,8 @@ class WebhookHealthServiceTest extends TestCase
                 static::isInstanceOf(Context::class)
             );
 
-        $service = new WebhookHealthService($connection, $relatedWebhooks);
-        $service->recordFailure($webhookId, WebhookFailureStrategy::Ignore);
+        $service = $this->createService($connection, $relatedWebhooks);
+        $service->recordLegacyFailure($webhookId, WebhookFailureStrategy::Ignore);
     }
 
     public function testResetErrorCount(): void
@@ -128,7 +131,18 @@ class WebhookHealthServiceTest extends TestCase
                 static::isInstanceOf(Context::class)
             );
 
-        $service = new WebhookHealthService($connection, $relatedWebhooks);
+        $service = $this->createService($connection, $relatedWebhooks);
         $service->resetErrorCount($webhookId);
+    }
+
+    private function createService(Connection $connection, RelatedWebhooks $relatedWebhooks): WebhookHealthService
+    {
+        return new WebhookHealthService(
+            $connection,
+            $relatedWebhooks,
+            static::createStub(WebhookOutboxStore::class),
+            new HealthConfig([300, 600, 1200, 2400, 3600, 14400], 5),
+            new MockClock(),
+        );
     }
 }
