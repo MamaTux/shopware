@@ -111,10 +111,7 @@ class WebhookManager implements ResetInterface
         $this->loadPrivileges($event->getName(), $affectedRoleIds);
 
         if (Feature::isActive('WEBHOOKS_REWORK')) {
-            $this->dispatchWebhooksWithHealth(
-                $this->collectMessages($webhooksForEvent, $event, $languageId, $userLocale),
-                $event,
-            );
+            $this->dispatchWebhooksWithHealth($webhooksForEvent, $event, $languageId, $userLocale);
 
             return;
         }
@@ -136,37 +133,67 @@ class WebhookManager implements ResetInterface
     }
 
     /**
-     * @param list<WebhookEventMessage> $messages
+     * @param list<Webhook> $webhooks
      */
     private function dispatchWebhooksWithHealth(
-        array $messages,
+        array $webhooks,
         Hookable $event,
+        string $languageId,
+        string $userLocale,
     ): void {
-        $deliver = [];
-        $hold = [];
+        $deliverableWebhooks = [];
+        $heldWebhooks = [];
+        $pendingShopIdChangeByApp = [];
 
-        foreach ($messages as $message) {
-            if ($this->webhookHealthService->gateFor($message->getWebhookId()) === WebhookDispatchDecision::Hold) {
-                $hold[] = $message;
+        foreach ($webhooks as $webhook) {
+            if (!$this->isEventDispatchingAllowed($webhook, $event)) {
+                continue;
+            }
+
+            // An undeliverable app source must not consume a recovery trial.
+            if ($webhook->appId !== null && $webhook->appVersion !== null) {
+                if (!\array_key_exists($webhook->appId, $pendingShopIdChangeByApp)) {
+                    try {
+                        $this->appPayloadServiceHelper->buildSource($webhook->appVersion, $webhook->appName ?? '');
+                        $pendingShopIdChangeByApp[$webhook->appId] = false;
+                    } catch (ShopIdChangeSuggestedException) {
+                        $pendingShopIdChangeByApp[$webhook->appId] = true;
+                    }
+                }
+
+                if ($pendingShopIdChangeByApp[$webhook->appId]) {
+                    continue;
+                }
+            }
+
+            $decision = $this->webhookHealthService->gateFor($webhook->id);
+            if ($decision === WebhookDispatchDecision::Skip) {
+                continue;
+            }
+
+            if ($decision === WebhookDispatchDecision::Hold) {
+                $heldWebhooks[] = $webhook;
 
                 continue;
             }
 
-            $deliver[] = $message;
+            $deliverableWebhooks[] = $webhook;
         }
 
-        if ($hold !== []) {
-            $this->webhookDeliveryService->hold($hold);
+        $heldMessages = $this->collectMessages($heldWebhooks, $event, $languageId, $userLocale);
+        if ($heldMessages !== []) {
+            $this->webhookDeliveryService->hold($heldMessages);
         }
 
-        if ($deliver === []) {
+        $messages = $this->collectMessages($deliverableWebhooks, $event, $languageId, $userLocale);
+        if ($messages === []) {
             return;
         }
 
         /** @deprecated tag:v6.8.0 - reason:parameter-will-be-removed - $forceSynchronous will be removed; lifecycle events will go async with retries */
         $isAppLifecycleEvent = $event instanceof AppDeletedEvent || $event instanceof AppChangedEvent || $event instanceof AppPermissionsUpdated;
 
-        $this->webhookDeliveryService->process($deliver, forceSynchronous: $isAppLifecycleEvent);
+        $this->webhookDeliveryService->process($messages, forceSynchronous: $isAppLifecycleEvent);
     }
 
     /**

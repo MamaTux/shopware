@@ -24,7 +24,16 @@ use Shopware\Core\Framework\Webhook\Health\EndpointState;
 #[Package('framework')]
 class WebhookOutboxStore
 {
+    public const CANCEL_REASON_SUSPENDED = 'endpoint_suspended';
+
+    public const CANCEL_REASON_HELD_EXPIRED = 'held_backlog_expired';
+
     public const CANCEL_REASON_ORPHANED = 'webhook_deleted';
+
+    /**
+     * Held deliveries older than this are cancelled before they can be released.
+     */
+    public const HELD_GRACE_AGE_HOURS = 24;
 
     public function __construct(
         private readonly Connection $connection,
@@ -439,8 +448,7 @@ class WebhookOutboxStore
 
     /**
      * Resets RUNNING rows in the partition with `last_attempt_at` older than
-     * `$staleAfterSeconds` back to PENDING_RETRY. Return value is the multi-table affected
-     * count; assertions should check row state, not the count.
+     * `$staleAfterSeconds` back to PENDING_RETRY, except for SUSPENDED webhooks.
      */
     public function resetRunningForPartition(string $partitionKey, int $staleAfterSeconds): int
     {
@@ -454,9 +462,79 @@ class WebhookOutboxStore
         // under InnoDB depending on the optimizer plan. Wrap in RetryableTransaction so
         // InnoDB aborts are retried in-place instead of bubbling into the receiver's
         // consecutive-deadlock fuse.
-        return RetryableTransaction::retryable(
-            $this->connection,
-            fn (): int => (int) $this->connection->executeStatement(
+        return RetryableTransaction::retryable($this->connection, function () use ($partitionKey, $nowFormatted, $now, $cutoff): int {
+            $staleWebhookIds = $this->connection->fetchFirstColumn(
+                'SELECT DISTINCT d.webhook_id FROM webhook_delivery d
+                 WHERE d.partition_key = :pk AND d.delivery_status = :running
+                   AND d.last_attempt_at <= :cutoff AND d.webhook_id IS NOT NULL',
+                [
+                    'pk' => $partitionKey,
+                    'running' => WebhookEventLogDefinition::STATUS_RUNNING,
+                    'cutoff' => $cutoff,
+                ]
+            );
+
+            $suspectedIds = [];
+            if ($staleWebhookIds !== []) {
+                // Narrow before locking to avoid pinning unrelated health rows.
+                /** @var list<string> $suspectedIds */
+                $suspectedIds = $this->connection->fetchFirstColumn(
+                    'SELECT webhook_id FROM webhook_health
+                     WHERE webhook_id IN (:ids) AND endpoint_state = :suspended',
+                    ['ids' => $staleWebhookIds, 'suspended' => EndpointState::Suspended->value],
+                    ['ids' => ArrayParameterType::BINARY]
+                );
+            }
+
+            $suspendedIds = [];
+            if ($suspectedIds !== []) {
+                // Recheck under the health lock so a concurrent recovery wins.
+                /** @var list<string> $suspendedIds */
+                $suspendedIds = $this->connection->fetchFirstColumn(
+                    'SELECT webhook_id FROM webhook_health
+                     WHERE webhook_id IN (:ids) AND endpoint_state = :suspended
+                     FOR UPDATE',
+                    ['ids' => $suspectedIds, 'suspended' => EndpointState::Suspended->value],
+                    ['ids' => ArrayParameterType::BINARY]
+                );
+            }
+
+            if ($suspendedIds !== []) {
+                $this->connection->executeStatement(
+                    'UPDATE webhook_event_log el
+                     JOIN webhook_delivery d ON d.webhook_event_log_id = el.id
+                     SET el.delivery_status = :failed, el.failure_reason = :reason, el.timestamp = :ts
+                     WHERE d.partition_key = :pk AND d.delivery_status = :running
+                       AND d.last_attempt_at <= :cutoff AND d.webhook_id IN (:ids)
+                       AND el.delivery_status NOT IN (:success, :failed)',
+                    [
+                        'failed' => WebhookEventLogDefinition::STATUS_FAILED,
+                        'reason' => self::CANCEL_REASON_SUSPENDED,
+                        'ts' => $now->getTimestamp(),
+                        'pk' => $partitionKey,
+                        'running' => WebhookEventLogDefinition::STATUS_RUNNING,
+                        'cutoff' => $cutoff,
+                        'ids' => $suspendedIds,
+                        'success' => WebhookEventLogDefinition::STATUS_SUCCESS,
+                    ],
+                    ['ids' => ArrayParameterType::BINARY]
+                );
+
+                $this->connection->executeStatement(
+                    'DELETE FROM webhook_delivery
+                     WHERE partition_key = :pk AND delivery_status = :running
+                       AND last_attempt_at <= :cutoff AND webhook_id IN (:ids)',
+                    [
+                        'pk' => $partitionKey,
+                        'running' => WebhookEventLogDefinition::STATUS_RUNNING,
+                        'cutoff' => $cutoff,
+                        'ids' => $suspendedIds,
+                    ],
+                    ['ids' => ArrayParameterType::BINARY]
+                );
+            }
+
+            return (int) $this->connection->executeStatement(
                 'UPDATE webhook_delivery d
                  JOIN webhook_event_log el ON el.id = d.webhook_event_log_id
                  SET d.delivery_status = :new,
@@ -478,20 +556,20 @@ class WebhookOutboxStore
                     'successStatus' => WebhookEventLogDefinition::STATUS_SUCCESS,
                     'failedStatus' => WebhookEventLogDefinition::STATUS_FAILED,
                 ]
-            )
-        );
+            );
+        });
     }
 
     /**
      * Updates both status mirrors atomically so no row remains claimable mid-transition.
      */
-    public function pauseDeliveriesForWebhook(string $webhookId): void
+    public function pauseDeliveriesForWebhook(string $webhookId): int
     {
         $now = $this->clock->now();
         $nowFormatted = $now->format(Defaults::STORAGE_DATE_TIME_FORMAT);
 
-        RetryableTransaction::retryable($this->connection, function () use ($webhookId, $now, $nowFormatted): void {
-            $this->connection->executeStatement(
+        return RetryableTransaction::retryable($this->connection, function () use ($webhookId, $now, $nowFormatted): int {
+            return (int) $this->connection->executeStatement(
                 'UPDATE webhook_delivery d
                  JOIN webhook_event_log el ON el.id = d.webhook_event_log_id
                  SET d.delivery_status = :paused,
@@ -516,16 +594,17 @@ class WebhookOutboxStore
     }
 
     /**
-     * Updates both status mirrors atomically to preserve claim order.
+     * Cancels expired holds, then atomically resumes the rest to preserve claim order.
      */
-    public function resumeDeliveriesForWebhook(string $webhookId): void
+    public function resumeDeliveriesForWebhook(string $webhookId): int
     {
         $now = $this->clock->now();
         $nowFormatted = $now->format(Defaults::STORAGE_DATE_TIME_FORMAT);
 
-        RetryableTransaction::retryable(
-            $this->connection,
-            fn (): int => (int) $this->connection->executeStatement(
+        return RetryableTransaction::retryable($this->connection, function () use ($webhookId, $now, $nowFormatted): int {
+            $this->cancelAgedHeldRows($webhookId);
+
+            return (int) $this->connection->executeStatement(
                 'UPDATE webhook_delivery d
                  JOIN webhook_event_log el ON el.id = d.webhook_event_log_id
                  SET d.delivery_status = :pendingRetry,
@@ -545,63 +624,141 @@ class WebhookOutboxStore
                     'ts' => $now->getTimestamp(),
                     'id' => Uuid::fromHexToBytes($webhookId),
                 ]
-            )
-        );
+            );
+        });
     }
 
     /**
-     * The caller owns the transaction and health-row lock.
+     * Cancels expired holds, then releases the oldest remaining row as the only trial.
      */
-    public function releaseOneTrialLocked(string $webhookId): bool
+    public function releaseOneTrial(string $webhookId): ?int
     {
-        $row = $this->connection->fetchAssociative(
-            'SELECT d.id, d.webhook_event_log_id
-             FROM webhook_delivery d
-             JOIN webhook_event_log el ON el.id = d.webhook_event_log_id
-             WHERE d.webhook_id = :id AND d.delivery_status = :paused
-               AND el.delivery_status NOT IN (:success, :failed)
-             ORDER BY d.id ASC
-             LIMIT 1
-             FOR UPDATE',
-            [
-                'id' => Uuid::fromHexToBytes($webhookId),
-                'paused' => WebhookEventLogDefinition::STATUS_PAUSED,
-                'success' => WebhookEventLogDefinition::STATUS_SUCCESS,
-                'failed' => WebhookEventLogDefinition::STATUS_FAILED,
-            ]
-        );
+        return RetryableTransaction::retryable($this->connection, function () use ($webhookId): ?int {
+            $this->cancelAgedHeldRows($webhookId);
 
-        if ($row === false) {
-            return false;
-        }
+            $row = $this->connection->fetchAssociative(
+                'SELECT d.id, d.webhook_event_log_id
+                 FROM webhook_delivery d
+                 JOIN webhook_event_log el ON el.id = d.webhook_event_log_id
+                 WHERE d.webhook_id = :id AND d.delivery_status = :paused
+                   AND el.delivery_status NOT IN (:success, :failed)
+                 ORDER BY d.id ASC
+                 LIMIT 1
+                 FOR UPDATE',
+                [
+                    'id' => Uuid::fromHexToBytes($webhookId),
+                    'paused' => WebhookEventLogDefinition::STATUS_PAUSED,
+                    'success' => WebhookEventLogDefinition::STATUS_SUCCESS,
+                    'failed' => WebhookEventLogDefinition::STATUS_FAILED,
+                ]
+            );
 
-        $now = $this->clock->now();
-        $nowFormatted = $now->format(Defaults::STORAGE_DATE_TIME_FORMAT);
+            if ($row === false) {
+                return null;
+            }
 
-        $this->connection->executeStatement(
-            'UPDATE webhook_delivery
-             SET delivery_status = :pendingRetry, next_retry_at = :now, updated_at = :now
-             WHERE id = :deliveryId',
-            [
-                'pendingRetry' => WebhookEventLogDefinition::STATUS_PENDING_RETRY,
-                'now' => $nowFormatted,
-                'deliveryId' => $row['id'],
-            ]
-        );
+            $now = $this->clock->now();
+            $nowFormatted = $now->format(Defaults::STORAGE_DATE_TIME_FORMAT);
 
-        $this->connection->executeStatement(
-            'UPDATE webhook_event_log SET delivery_status = :pendingRetry, timestamp = :ts WHERE id = :elId',
-            [
-                'pendingRetry' => WebhookEventLogDefinition::STATUS_PENDING_RETRY,
-                'ts' => $now->getTimestamp(),
-                'elId' => $row['webhook_event_log_id'],
-            ]
-        );
+            $this->connection->executeStatement(
+                'UPDATE webhook_delivery
+                 SET delivery_status = :pendingRetry, next_retry_at = :now, updated_at = :now
+                 WHERE id = :deliveryId',
+                [
+                    'pendingRetry' => WebhookEventLogDefinition::STATUS_PENDING_RETRY,
+                    'now' => $nowFormatted,
+                    'deliveryId' => $row['id'],
+                ]
+            );
 
-        return true;
+            $this->connection->executeStatement(
+                'UPDATE webhook_event_log SET delivery_status = :pendingRetry, timestamp = :ts WHERE id = :elId',
+                [
+                    'pendingRetry' => WebhookEventLogDefinition::STATUS_PENDING_RETRY,
+                    'ts' => $now->getTimestamp(),
+                    'elId' => $row['webhook_event_log_id'],
+                ]
+            );
+
+            return (int) $row['id'];
+        });
     }
 
     /**
+     * Keeps one claimable trial for a SUSPENDED webhook, or none if one is already running.
+     */
+    public function cancelSurplusInFlightRows(string $webhookId): int
+    {
+        return RetryableTransaction::retryable($this->connection, function () use ($webhookId): int {
+            $id = Uuid::fromHexToBytes($webhookId);
+
+            $state = $this->connection->fetchOne(
+                'SELECT endpoint_state FROM webhook_health WHERE webhook_id = :id FOR UPDATE',
+                ['id' => $id]
+            );
+            if ($state !== EndpointState::Suspended->value) {
+                return 0;
+            }
+
+            $hasRunning = (bool) $this->connection->fetchOne(
+                'SELECT 1 FROM webhook_delivery WHERE webhook_id = :id AND delivery_status = :running LIMIT 1 FOR UPDATE',
+                ['id' => $id, 'running' => WebhookEventLogDefinition::STATUS_RUNNING]
+            );
+
+            $keepId = null;
+            if (!$hasRunning) {
+                $oldest = $this->connection->fetchOne(
+                    'SELECT id FROM webhook_delivery
+                     WHERE webhook_id = :id AND delivery_status IN (:queued, :pendingRetry)
+                     ORDER BY id ASC LIMIT 1 FOR UPDATE',
+                    [
+                        'id' => $id,
+                        'queued' => WebhookEventLogDefinition::STATUS_QUEUED,
+                        'pendingRetry' => WebhookEventLogDefinition::STATUS_PENDING_RETRY,
+                    ]
+                );
+                $keepId = $oldest === false ? null : (int) $oldest;
+            }
+
+            $now = $this->clock->now();
+            $keepClause = $keepId !== null ? ' AND d.id <> :keepId' : '';
+            $keepParam = $keepId !== null ? ['keepId' => $keepId] : [];
+
+            $this->connection->executeStatement(
+                'UPDATE webhook_event_log el
+                 JOIN webhook_delivery d ON d.webhook_event_log_id = el.id
+                 SET el.delivery_status = :failed, el.failure_reason = :reason, el.timestamp = :ts
+                 WHERE d.webhook_id = :id
+                   AND d.delivery_status IN (:queued, :pendingRetry)
+                   AND el.delivery_status NOT IN (:success, :failed)' . $keepClause,
+                [
+                    'failed' => WebhookEventLogDefinition::STATUS_FAILED,
+                    'reason' => self::CANCEL_REASON_SUSPENDED,
+                    'ts' => $now->getTimestamp(),
+                    'id' => $id,
+                    'queued' => WebhookEventLogDefinition::STATUS_QUEUED,
+                    'pendingRetry' => WebhookEventLogDefinition::STATUS_PENDING_RETRY,
+                    'success' => WebhookEventLogDefinition::STATUS_SUCCESS,
+                    ...$keepParam,
+                ]
+            );
+
+            return (int) $this->connection->executeStatement(
+                'DELETE d FROM webhook_delivery d
+                 WHERE d.webhook_id = :id AND d.delivery_status IN (:queued, :pendingRetry)' . $keepClause,
+                [
+                    'id' => $id,
+                    'queued' => WebhookEventLogDefinition::STATUS_QUEUED,
+                    'pendingRetry' => WebhookEventLogDefinition::STATUS_PENDING_RETRY,
+                    ...$keepParam,
+                ]
+            );
+        });
+    }
+
+    /**
+     * Finds holds stranded by a recovery race; orphaned rows are handled separately.
+     *
      * @return list<string> webhook ids (hex)
      */
     public function findWebhookIdsWithStrandedHolds(): array
@@ -621,9 +778,9 @@ class WebhookOutboxStore
     /**
      * ON DELETE SET NULL leaves held rows unroutable; update and delete them atomically.
      */
-    public function cancelOrphanedHeldRows(): void
+    public function cancelOrphanedHeldRows(): int
     {
-        RetryableTransaction::retryable($this->connection, function (): void {
+        return RetryableTransaction::retryable($this->connection, function (): int {
             $now = $this->clock->now();
 
             $this->connection->executeStatement(
@@ -644,12 +801,51 @@ class WebhookOutboxStore
                 ]
             );
 
-            $this->connection->executeStatement(
+            return (int) $this->connection->executeStatement(
                 'DELETE FROM webhook_delivery
                  WHERE webhook_id IS NULL AND delivery_status = :paused',
                 ['paused' => WebhookEventLogDefinition::STATUS_PAUSED]
             );
         });
+    }
+
+    /**
+     * @return list<string> webhook ids (hex)
+     */
+    public function findSuspendedWebhookIdsWithClaimableRows(): array
+    {
+        /** @var list<string> */
+        return $this->connection->fetchFirstColumn(
+            'SELECT DISTINCT LOWER(HEX(d.webhook_id))
+             FROM webhook_delivery d
+             JOIN webhook_health wh ON wh.webhook_id = d.webhook_id
+             WHERE wh.endpoint_state = :suspended AND d.delivery_status IN (:queued, :pendingRetry)',
+            [
+                'suspended' => EndpointState::Suspended->value,
+                'queued' => WebhookEventLogDefinition::STATUS_QUEUED,
+                'pendingRetry' => WebhookEventLogDefinition::STATUS_PENDING_RETRY,
+            ]
+        );
+    }
+
+    /**
+     * Point-in-time read; callers that need consistency must hold the health-row lock.
+     */
+    public function hasHeldRows(string $webhookId): bool
+    {
+        return (bool) $this->connection->fetchOne(
+            'SELECT 1 FROM webhook_delivery d
+             JOIN webhook_event_log el ON el.id = d.webhook_event_log_id
+             WHERE d.webhook_id = :id AND d.delivery_status = :paused
+               AND el.delivery_status NOT IN (:success, :failed)
+             LIMIT 1',
+            [
+                'id' => Uuid::fromHexToBytes($webhookId),
+                'paused' => WebhookEventLogDefinition::STATUS_PAUSED,
+                'success' => WebhookEventLogDefinition::STATUS_SUCCESS,
+                'failed' => WebhookEventLogDefinition::STATUS_FAILED,
+            ]
+        );
     }
 
     /**
@@ -697,6 +893,53 @@ class WebhookOutboxStore
             [
                 'sequence' => Types::INTEGER,
                 'executionCount' => Types::INTEGER,
+            ]
+        );
+    }
+
+    /**
+     * Cancels the webhook's held rows that are older than the grace window. The event-log rows are
+     * marked FAILED with {@see CANCEL_REASON_HELD_EXPIRED} (payload kept, so the row can be
+     * replayed), then the delivery rows are deleted. Both statements run in the caller's
+     * transaction, so their order does not affect crash-safety: a crash rolls back both, never a
+     * half-state — the transaction is the mechanism, not the statement order.
+     */
+    private function cancelAgedHeldRows(string $webhookId): int
+    {
+        $now = $this->clock->now();
+        $cutoff = $now
+            ->modify(\sprintf('-%d hours', self::HELD_GRACE_AGE_HOURS))
+            ->format(Defaults::STORAGE_DATE_TIME_FORMAT);
+        $id = Uuid::fromHexToBytes($webhookId);
+
+        $this->connection->executeStatement(
+            'UPDATE webhook_event_log el
+             JOIN webhook_delivery d ON d.webhook_event_log_id = el.id
+             SET el.delivery_status = :failed,
+                 el.failure_reason  = :reason,
+                 el.timestamp       = :ts
+             WHERE d.webhook_id = :id
+               AND d.delivery_status = :paused
+               AND d.created_at < :cutoff
+               AND el.delivery_status NOT IN (:success, :failed)',
+            [
+                'failed' => WebhookEventLogDefinition::STATUS_FAILED,
+                'reason' => self::CANCEL_REASON_HELD_EXPIRED,
+                'ts' => $now->getTimestamp(),
+                'id' => $id,
+                'paused' => WebhookEventLogDefinition::STATUS_PAUSED,
+                'cutoff' => $cutoff,
+                'success' => WebhookEventLogDefinition::STATUS_SUCCESS,
+            ]
+        );
+
+        return (int) $this->connection->executeStatement(
+            'DELETE FROM webhook_delivery
+             WHERE webhook_id = :id AND delivery_status = :paused AND created_at < :cutoff',
+            [
+                'id' => $id,
+                'paused' => WebhookEventLogDefinition::STATUS_PAUSED,
+                'cutoff' => $cutoff,
             ]
         );
     }

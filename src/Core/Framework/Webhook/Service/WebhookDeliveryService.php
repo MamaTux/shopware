@@ -294,7 +294,7 @@ class WebhookDeliveryService
             return;
         }
 
-        if ($state === EndpointState::Degraded) {
+        if ($state === EndpointState::Degraded || $state === EndpointState::Suspended) {
             $this->webhookOutboxStore->markPaused($entry, $response);
 
             return;
