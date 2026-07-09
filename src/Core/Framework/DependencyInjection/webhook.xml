@@ -54,6 +54,7 @@
             <argument type="service" id="Shopware\Core\Framework\Webhook\Outbox\WebhookOutboxStore"/>
             <argument type="service" id="Shopware\Core\Framework\Webhook\Health\HealthConfig"/>
             <argument type="service" id="Symfony\Component\Clock\ClockInterface"/>
+            <argument type="service" id="event_dispatcher"/>
             <argument type="service" id="logger"/>
         </service>
 
@@ -210,6 +211,22 @@
         <service id="Shopware\Core\Framework\Webhook\Subscriber\ResumeSuspensionClockOnAppActivationSubscriber">
             <argument type="service" id="Shopware\Core\Framework\Webhook\Service\WebhookHealthService"/>
             <tag name="kernel.event_subscriber"/>
+        </service>
+
+        <service id="Shopware\Core\Framework\Webhook\Subscriber\WebhookHealthNotificationSubscriber">
+            <argument type="service" id="Doctrine\DBAL\Connection"/>
+            <argument type="service" id="Symfony\Component\Clock\ClockInterface"/>
+            <tag name="kernel.event_subscriber"/>
+        </service>
+
+        <service id="Shopware\Core\Framework\Webhook\Api\WebhookHealthController" public="true">
+            <argument type="service" id="Doctrine\DBAL\Connection"/>
+            <argument type="service" id="Shopware\Core\Framework\RateLimiter\RateLimiter"/>
+            <argument type="service" id="Shopware\Core\Framework\Webhook\Service\WebhookHealthService"/>
+            <argument type="service" id="Symfony\Component\Clock\ClockInterface"/>
+            <argument type="service" id="Shopware\Core\Framework\Adapter\Storage\AbstractKeyValueStorage"/>
+
+            <tag name="controller.service_arguments"/>
         </service>
 
         <service id="Shopware\Core\Framework\Webhook\Service\WebhookCleanup">

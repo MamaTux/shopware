@@ -5,17 +5,23 @@ namespace Shopware\Core\Framework\Webhook\Service;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 use Psr\Clock\ClockInterface;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use Psr\Log\LoggerInterface;
 use Shopware\Core\Defaults;
 use Shopware\Core\Framework\Context;
 use Shopware\Core\Framework\DataAbstractionLayer\Doctrine\RetryableTransaction;
 use Shopware\Core\Framework\Log\Package;
 use Shopware\Core\Framework\Uuid\Uuid;
+use Shopware\Core\Framework\Webhook\Event\WebhookActivatedEvent;
 use Shopware\Core\Framework\Webhook\Event\WebhookActivationTrigger;
+use Shopware\Core\Framework\Webhook\Event\WebhookDegradedEvent;
+use Shopware\Core\Framework\Webhook\Event\WebhookDisabledEvent;
+use Shopware\Core\Framework\Webhook\Event\WebhookSuspendedEvent;
 use Shopware\Core\Framework\Webhook\Health\DisabledOrigin;
 use Shopware\Core\Framework\Webhook\Health\EndpointState;
 use Shopware\Core\Framework\Webhook\Health\ErrorClassification;
 use Shopware\Core\Framework\Webhook\Health\HealthConfig;
+use Shopware\Core\Framework\Webhook\Health\SuspensionCause;
 use Shopware\Core\Framework\Webhook\Health\WebhookDispatchDecision;
 use Shopware\Core\Framework\Webhook\Outbox\WebhookOutboxStore;
 use Shopware\Core\Framework\Webhook\WebhookException;
@@ -33,6 +39,7 @@ class WebhookHealthService
         private readonly WebhookOutboxStore $outboxStore,
         private readonly HealthConfig $config,
         private readonly ClockInterface $clock,
+        private readonly EventDispatcherInterface $eventDispatcher,
         private readonly LoggerInterface $logger,
     ) {
     }
@@ -44,10 +51,12 @@ class WebhookHealthService
             ['id' => Uuid::fromHexToBytes($webhookId)]
         );
         if (!\is_array($row)) {
+            // Fail-open: a missing health row reads as HEALTHY, so dispatch is never silently blocked.
             return WebhookDispatchDecision::Deliver;
         }
 
         $state = EndpointState::from((string) $row['endpoint_state']);
+
         if ($state === EndpointState::Healthy) {
             return WebhookDispatchDecision::Deliver;
         }
@@ -74,15 +83,20 @@ class WebhookHealthService
         );
         $state = \is_array($row) ? EndpointState::from((string) $row['endpoint_state']) : EndpointState::Healthy;
 
-        // A success recovers one state at a time.
+        // A 2xx moves the webhook up exactly one state. SUSPENDED → DEGRADED: the ladder resets
+        // to tier 0 but suspended_since is kept — HEALTHY must be earned through the same ladder.
+        // DEGRADED → HEALTHY: full reset, and the held backlog resumes (old events filtered out
+        // by age).
         if ($state === EndpointState::Suspended && $this->deEscalateSuspendedToDegraded($webhookId)) {
             return;
         }
 
-        if ($state === EndpointState::Degraded && $this->promoteDegradedToHealthy($webhookId, keepFailureStreaks: false)) {
+        if ($state === EndpointState::Degraded && $this->promoteDegradedToHealthy($webhookId, WebhookActivationTrigger::Trial)) {
             return;
         }
 
+        // HEALTHY with partial streaks: any 2xx resets both failure counters, so failures from
+        // separate outages don't add up over time.
         if (\is_array($row) && ((int) $row['consecutive_transient_failures'] > 0 || (int) $row['consecutive_non_transient_failures'] > 0)) {
             $cleared = (int) $this->connection->executeStatement(
                 'UPDATE webhook_health
@@ -149,7 +163,7 @@ class WebhookHealthService
 
     public function pauseSuspensionClockForApp(string $appId): void
     {
-        // Start measuring the interval for which suspension is paused.
+        // Start measuring the time for which suspension is paused.
         $this->connection->executeStatement(
             'UPDATE webhook_health wh
              JOIN webhook w ON w.id = wh.webhook_id
@@ -190,16 +204,21 @@ class WebhookHealthService
 
     public function reactivate(string $webhookId, WebhookActivationTrigger $trigger): int
     {
-        return RetryableTransaction::retryable($this->connection, function () use ($webhookId, $trigger): int {
+        $event = RetryableTransaction::retryable($this->connection, function () use ($webhookId, $trigger): ?WebhookActivatedEvent {
             $id = Uuid::fromHexToBytes($webhookId);
 
-            // Lock the webhook before changing its health or legacy mirror.
-            if ($this->connection->fetchOne('SELECT 1 FROM webhook WHERE id = :id FOR UPDATE', ['id' => $id]) === false) {
-                return 0;
+            // Lock the webhook and read the identity carried by the event.
+            $webhookRow = $this->connection->fetchAssociative(
+                'SELECT LOWER(HEX(app_id)) AS app_id, name, event_name FROM webhook WHERE id = :id FOR UPDATE',
+                ['id' => $id]
+            );
+            if (!\is_array($webhookRow)) {
+                return null;
             }
+            $appId = \is_string($webhookRow['app_id']) ? $webhookRow['app_id'] : null;
 
             $row = $this->connection->fetchAssociative(
-                'SELECT endpoint_state, disabled_origin
+                'SELECT endpoint_state, suspended_since, disabled_origin
                  FROM webhook_health WHERE webhook_id = :id FOR UPDATE',
                 ['id' => $id]
             );
@@ -212,25 +231,46 @@ class WebhookHealthService
                 );
                 $this->outboxStore->resumeDeliveriesForWebhook($webhookId);
 
-                return 0;
+                return null;
             }
 
             $fromState = EndpointState::from((string) $row['endpoint_state']);
 
             $transitioned = $this->reactivationPolicyAllows($trigger, $fromState, $row['disabled_origin'])
-                && $this->resetToHealthy($webhookId, keepFailureStreaks: false);
+                && $this->resetToHealthy($webhookId, keepStreaks: false);
 
             $this->mirrorBcColumns($webhookId);
 
-            // Refused recoveries repair the mirror but must not release held deliveries.
+            // Refused recoveries repair the BC mirror but must not release held deliveries.
             if (!$transitioned && $fromState !== EndpointState::Healthy) {
-                return 0;
+                return null;
             }
 
             $this->outboxStore->resumeDeliveriesForWebhook($webhookId);
 
-            return $transitioned ? 1 : 0;
+            if (!$transitioned) {
+                return null;
+            }
+
+            return new WebhookActivatedEvent(
+                $webhookId,
+                $appId,
+                $fromState,
+                $trigger,
+                \is_string($webhookRow['name']) ? $webhookRow['name'] : null,
+                \is_string($webhookRow['event_name']) ? $webhookRow['event_name'] : null,
+                $this->clock->now(),
+                $this->toDateTime($row['suspended_since']),
+            );
         });
+
+        if ($event === null) {
+            return 0;
+        }
+
+        $this->dispatchBestEffort($event);
+
+        return 1;
     }
 
     public function reactivateForApp(string $appId): int
@@ -269,7 +309,11 @@ class WebhookHealthService
 
     /**
      * @deprecated tag:v6.8.0 - Pre-rework shared-counter failure handling. Runs only with WEBHOOKS_REWORK
-     * off and is removed together with the `webhook.active`/`error_count` columns.
+     * off and is removed together with the `webhook.active`/`error_count` columns. Renamed from
+     * `recordFailure` so the per-delivery {@see recordFailure} can use that name when the
+     * flag is on.
+     *
+     * Increments error_count and applies the strategy. No-op if the webhook is missing or inactive.
      */
     public function recordLegacyFailure(string $webhookId, WebhookFailureStrategy $strategy): void
     {
@@ -293,7 +337,7 @@ class WebhookHealthService
 
     /**
      * @deprecated tag:v6.8.0 - Pre-rework shared-counter reset. Runs only with WEBHOOKS_REWORK off and is
-     * removed together with the legacy columns.
+     * removed together with the legacy columns. With the flag on, {@see recordSuccess} owns the per-webhook reset.
      */
     public function resetErrorCount(string $webhookId): void
     {
@@ -326,50 +370,51 @@ class WebhookHealthService
         );
 
         $acted = 0;
+        /** @var list<WebhookActivatedEvent> $idlePromotions */
+        $idlePromotions = [];
         foreach ($candidates as $webhookId) {
-            $acted += RetryableTransaction::retryable($this->connection, function () use ($webhookId, $now): int {
+            // Keep events outside retryable transactions and dispatch them after all candidates.
+            $outcome = RetryableTransaction::retryable($this->connection, function () use ($webhookId, $now): array {
                 // The row lock prevents concurrent ticks from releasing multiple trials.
                 $row = $this->lockHealthRow($webhookId);
                 if ($row === null) {
-                    return 0;
+                    return ['acted' => 0, 'event' => null];
                 }
-
                 $state = EndpointState::from((string) $row['endpoint_state']);
                 if ($state !== EndpointState::Degraded && $state !== EndpointState::Suspended) {
-                    return 0;
+                    return ['acted' => 0, 'event' => null];
                 }
                 if ($row['cooldown_until'] !== null && (string) $row['cooldown_until'] > $now) {
-                    return 0;
+                    return ['acted' => 0, 'event' => null];
                 }
 
                 // A trial advances the ladder through its result, not through elapsed time.
                 if ($this->outboxStore->hasClaimableOrRunningRows($webhookId)) {
-                    return 0;
+                    return ['acted' => 0, 'event' => null];
                 }
 
+                // Releasing a trial does not advance the ladder; its result does.
                 if ($this->outboxStore->releaseOneTrial($webhookId) !== null) {
-                    return 1;
+                    return ['acted' => 1, 'event' => null];
                 }
 
                 if ($state === EndpointState::Suspended) {
-                    return 0;
+                    return ['acted' => 0, 'event' => null];
                 }
 
-                return $this->promoteDegradedToHealthyLocked($webhookId, keepFailureStreaks: true) ? 1 : 0;
+                $event = $this->promoteDegradedToHealthyLocked($webhookId, WebhookActivationTrigger::Idle);
+
+                return ['acted' => $event !== null ? 1 : 0, 'event' => $event];
             });
+
+            $acted += $outcome['acted'];
+            if ($outcome['event'] !== null) {
+                $idlePromotions[] = $outcome['event'];
+            }
         }
 
-        return $acted;
-    }
-
-    /**
-     * Cancels crash-recovered rows beyond the single SUSPENDED trial.
-     */
-    private function cancelSurplusSuspendedInFlight(): int
-    {
-        $acted = 0;
-        foreach ($this->outboxStore->findSuspendedWebhookIdsWithClaimableRows() as $webhookId) {
-            $acted += $this->outboxStore->cancelSurplusInFlightRows($webhookId) > 0 ? 1 : 0;
+        foreach ($idlePromotions as $event) {
+            $this->dispatchBestEffort($event);
         }
 
         return $acted;
@@ -384,9 +429,9 @@ class WebhookHealthService
             ->modify(\sprintf('-%d days', $this->config->maxSuspendedDays))
             ->format(Defaults::STORAGE_DATE_TIME_FORMAT);
 
-        /** @var list<string> $candidates */
-        $candidates = $this->connection->fetchFirstColumn(
-            'SELECT LOWER(HEX(wh.webhook_id))
+        /** @var list<array{webhook_id: string, app_id: ?string, name: ?string, event_name: ?string}> $candidates */
+        $candidates = $this->connection->fetchAllAssociative(
+            'SELECT LOWER(HEX(wh.webhook_id)) AS webhook_id, LOWER(HEX(w.app_id)) AS app_id, w.name, w.event_name
              FROM webhook_health wh
              LEFT JOIN webhook w ON w.id = wh.webhook_id
              LEFT JOIN app a ON a.id = w.app_id
@@ -397,8 +442,9 @@ class WebhookHealthService
         );
 
         $retired = 0;
-        foreach ($candidates as $webhookId) {
-            $disabled = RetryableTransaction::retryable($this->connection, function () use ($webhookId, $cutoff): bool {
+        foreach ($candidates as $candidate) {
+            $webhookId = $candidate['webhook_id'];
+            $event = RetryableTransaction::retryable($this->connection, function () use ($webhookId, $candidate, $cutoff): ?WebhookDisabledEvent {
                 // A busy or recovered candidate is left for a later tick.
                 $locked = $this->connection->fetchOne(
                     'SELECT 1 FROM webhook_health
@@ -411,17 +457,30 @@ class WebhookHealthService
                     ]
                 );
                 if ($locked === false) {
-                    return false;
+                    return null;
                 }
 
-                return $this->disableRowLocked($webhookId, EndpointState::Suspended, DisabledOrigin::Escalation) > 0;
+                if ($this->disableRowLocked($webhookId, EndpointState::Suspended, DisabledOrigin::Escalation) === 0) {
+                    return null;
+                }
+
+                return new WebhookDisabledEvent(
+                    $webhookId,
+                    $candidate['app_id'],
+                    EndpointState::Suspended,
+                    DisabledOrigin::Escalation,
+                    $candidate['name'],
+                    $candidate['event_name'],
+                    $this->clock->now(),
+                );
             });
 
-            if (!$disabled) {
+            if ($event === null) {
                 continue;
             }
 
             $this->outboxStore->dropBacklogForWebhook($webhookId, WebhookOutboxStore::DROP_REASON_DISABLED);
+            $this->dispatchBestEffort($event);
             $this->logger->warning('Webhook endpoint disabled after exceeding the suspension bound', [
                 'webhookId' => $webhookId,
                 'maxSuspendedDays' => $this->config->maxSuspendedDays,
@@ -430,6 +489,19 @@ class WebhookHealthService
         }
 
         return $retired;
+    }
+
+    /**
+     * Cancels crash-recovered rows beyond the single SUSPENDED trial.
+     */
+    private function cancelSurplusSuspendedInFlight(): int
+    {
+        $acted = 0;
+        foreach ($this->outboxStore->findSuspendedWebhookIdsWithClaimableRows() as $webhookId) {
+            $acted += $this->outboxStore->cancelSurplusInFlightRows($webhookId) > 0 ? 1 : 0;
+        }
+
+        return $acted;
     }
 
     /**
@@ -500,7 +572,8 @@ class WebhookHealthService
 
         return match ($trigger) {
             WebhookActivationTrigger::Manual => $fromState === EndpointState::Suspended || $fromState === EndpointState::Disabled,
-            WebhookActivationTrigger::AppReset => !($fromState === EndpointState::Disabled && $disabledOrigin === DisabledOrigin::Operator->value),
+            WebhookActivationTrigger::AppReset,
+            WebhookActivationTrigger::AppReactivateApi => !($fromState === EndpointState::Disabled && $disabledOrigin === DisabledOrigin::Operator->value),
             WebhookActivationTrigger::Trial,
             WebhookActivationTrigger::Idle => false,
         };
@@ -512,17 +585,26 @@ class WebhookHealthService
     private function disableFrom(string $webhookId, ?array $onlyFrom): int
     {
         // Persist operator intent even when the lazy health row does not exist yet.
-        $disabled = RetryableTransaction::retryable($this->connection, function () use ($webhookId, $onlyFrom): bool {
+        $event = RetryableTransaction::retryable($this->connection, function () use ($webhookId, $onlyFrom): ?WebhookDisabledEvent {
             $row = $this->lockHealthRow($webhookId);
 
             if ($row === null) {
-                return $this->insertFreshDisabledRow($webhookId);
+                $event = $this->insertFreshDisabledRow($webhookId);
+                if ($event !== null) {
+                    return $event;
+                }
+
+                // A concurrent insert won; apply the operator intent to that row.
+                $row = $this->lockHealthRow($webhookId);
+                if ($row === null) {
+                    return null;
+                }
             }
 
             $fromState = EndpointState::from((string) $row['endpoint_state']);
 
             if ($fromState === EndpointState::Disabled) {
-                // A dedicated action upgrades an escalation disable to operator intent.
+                // The dedicated action turns an escalation disable into an operator kill.
                 if ($onlyFrom === null) {
                     $this->connection->executeStatement(
                         'UPDATE webhook_health SET disabled_origin = :origin, updated_at = :now
@@ -536,21 +618,36 @@ class WebhookHealthService
                     );
                 }
 
-                return false;
+                return null;
             }
 
             if ($onlyFrom !== null && !\in_array($fromState, $onlyFrom, true)) {
-                return false;
+                return null;
             }
 
-            return $this->disableRowLocked($webhookId, $fromState, DisabledOrigin::Operator) > 0;
+            if ($this->disableRowLocked($webhookId, $fromState, DisabledOrigin::Operator) === 0) {
+                return null;
+            }
+
+            $ref = $this->webhookRefOf($webhookId);
+
+            return new WebhookDisabledEvent(
+                $webhookId,
+                $ref['appId'],
+                $fromState,
+                DisabledOrigin::Operator,
+                $ref['name'],
+                $ref['eventName'],
+                $this->clock->now(),
+            );
         });
 
-        if (!$disabled) {
+        if ($event === null) {
             return 0;
         }
 
         $this->outboxStore->dropBacklogForWebhook($webhookId, WebhookOutboxStore::DROP_REASON_DISABLED);
+        $this->dispatchBestEffort($event);
         $this->logger->warning('Webhook endpoint disabled by operator', ['webhookId' => $webhookId]);
 
         return 1;
@@ -580,32 +677,6 @@ class WebhookHealthService
         }
 
         return $disabled;
-    }
-
-    /**
-     * Creates the first health row for an operator kill.
-     */
-    private function insertFreshDisabledRow(string $webhookId): bool
-    {
-        try {
-            $this->connection->executeStatement(
-                'INSERT INTO webhook_health (webhook_id, endpoint_state, disabled_since, disabled_origin, created_at, updated_at)
-                 VALUES (:id, :disabled, :now, :origin, :now, :now)',
-                [
-                    'id' => Uuid::fromHexToBytes($webhookId),
-                    'disabled' => EndpointState::Disabled->value,
-                    'now' => $this->now(),
-                    'origin' => DisabledOrigin::Operator->value,
-                ]
-            );
-        } catch (UniqueConstraintViolationException) {
-            // A concurrent insert is handled on the next operator write.
-            return false;
-        }
-
-        $this->mirrorBcColumns($webhookId);
-
-        return true;
     }
 
     private function recordTransientFailure(string $webhookId, int $attempt): EndpointState
@@ -666,17 +737,28 @@ class WebhookHealthService
             }
         });
 
-        if ($outcome === null) {
-            return $this->currentState($webhookId);
-        }
-
         if ($outcome === EndpointState::Degraded) {
+            // Hold the rest of the backlog for the ladder; the result side holds the in-flight row itself.
             $this->outboxStore->pauseDeliveriesForWebhook($webhookId);
+            $ref = $this->webhookRefOf($webhookId);
+            $this->dispatchBestEffort(new WebhookDegradedEvent(
+                $webhookId,
+                $ref['appId'],
+                EndpointState::Healthy,
+                $ref['name'],
+                $ref['eventName'],
+                $this->clock->now(),
+            ));
         }
 
-        $this->mirrorBcColumns($webhookId);
+        if ($outcome !== null) {
+            $this->mirrorBcColumns($webhookId);
 
-        return $outcome;
+            return $outcome;
+        }
+
+        // Another writer moved the state — report what it is now.
+        return $this->currentState($webhookId);
     }
 
     private function updateHealthyTransientFailure(
@@ -721,22 +803,81 @@ class WebhookHealthService
     }
 
     /**
+     * Counts auth failures toward suspension; endpoint retirement suspends immediately.
+     */
+    private function recordNonTransientFailure(string $webhookId, bool $countsStreak): EndpointState
+    {
+        $cause = $countsStreak ? SuspensionCause::AuthStreak : SuspensionCause::Gone;
+        $result = RetryableTransaction::retryable($this->connection, function () use ($webhookId, $countsStreak, $cause): array {
+            $row = $this->lockHealthRow($webhookId);
+
+            if ($row === null) {
+                // Fail-open first failure on a webhook without a health row.
+                $streak = $countsStreak ? 1 : 0;
+                $suspend = !$countsStreak || $this->config->nonTransientThreshold <= 1;
+                $event = $this->insertFreshRowForNonTransient($webhookId, $streak, $suspend, $cause);
+
+                return [$suspend ? EndpointState::Suspended : EndpointState::Healthy, $event];
+            }
+
+            $state = EndpointState::from((string) $row['endpoint_state']);
+
+            if ($state === EndpointState::Suspended) {
+                $event = $this->advanceLadderLocked($webhookId, $row, $state, alsoCountAuthStreak: $countsStreak);
+
+                return [EndpointState::Suspended, $event];
+            }
+
+            if ($state === EndpointState::Disabled) {
+                return [$state, null];
+            }
+
+            $streak = (int) $row['consecutive_non_transient_failures'] + ($countsStreak ? 1 : 0);
+            if (!$countsStreak || $streak >= $this->config->nonTransientThreshold) {
+                return [EndpointState::Suspended, $this->suspendLocked($webhookId, $row, $state, nonTransientFailures: $streak, cause: $cause)];
+            }
+
+            if ($state === EndpointState::Degraded) {
+                // A below-threshold auth failure still counts as a failed trial.
+                $event = $this->advanceLadderLocked($webhookId, $row, $state, alsoCountAuthStreak: true);
+
+                return [$event !== null ? EndpointState::Suspended : $state, $event];
+            }
+
+            $this->connection->executeStatement(
+                'UPDATE webhook_health
+                 SET consecutive_non_transient_failures = :streak, updated_at = :now
+                 WHERE webhook_id = :id',
+                ['streak' => $streak, 'now' => $this->now(), 'id' => Uuid::fromHexToBytes($webhookId)]
+            );
+            $this->mirrorBcColumns($webhookId);
+
+            return [$state, null];
+        });
+
+        $this->finishSuspension($webhookId, $result[1]);
+
+        return $result[0];
+    }
+
+    /**
      * Advances a failed trial and returns the resulting state.
      */
     private function advanceLadder(string $webhookId, EndpointState $expected): EndpointState
     {
-        $suspended = RetryableTransaction::retryable($this->connection, function () use ($webhookId, $expected): bool {
+        $suspension = RetryableTransaction::retryable($this->connection, function () use ($webhookId, $expected): ?WebhookSuspendedEvent {
             $row = $this->lockHealthRow($webhookId);
             if ($row === null || EndpointState::from((string) $row['endpoint_state']) !== $expected) {
-                return false;
+                // Ignore a result for a state that changed concurrently.
+                return null;
             }
 
             return $this->advanceLadderLocked($webhookId, $row, $expected, alsoCountAuthStreak: false);
         });
 
-        $this->finishSuspension($webhookId, $suspended);
+        $this->finishSuspension($webhookId, $suspension);
 
-        return $suspended ? EndpointState::Suspended : $expected;
+        return $suspension !== null ? EndpointState::Suspended : $expected;
     }
 
     /**
@@ -744,7 +885,7 @@ class WebhookHealthService
      *
      * @param array<string, mixed> $row
      */
-    private function advanceLadderLocked(string $webhookId, array $row, EndpointState $state, bool $alsoCountAuthStreak): bool
+    private function advanceLadderLocked(string $webhookId, array $row, EndpointState $state, bool $alsoCountAuthStreak): ?WebhookSuspendedEvent
     {
         $now = $this->now();
         $id = Uuid::fromHexToBytes($webhookId);
@@ -761,16 +902,14 @@ class WebhookHealthService
                 $this->mirrorBcColumns($webhookId);
             }
 
-            return false;
+            return null;
         }
 
         $topIndex = \count($this->config->cooldownScheduleSeconds) - 1;
         $nextIndex = (int) $row['degraded_cycle_count'] + 1;
 
         if ($state === EndpointState::Degraded && $nextIndex > $topIndex) {
-            $this->suspendLocked($webhookId, $row, $state, nonTransientFailures: $streak, entryIndex: $topIndex);
-
-            return true;
+            return $this->suspendLocked($webhookId, $row, $state, nonTransientFailures: $streak, cause: SuspensionCause::ScheduleExhausted, entryIndex: $topIndex);
         }
 
         $index = min($nextIndex, $topIndex);
@@ -792,65 +931,7 @@ class WebhookHealthService
             $this->mirrorBcColumns($webhookId);
         }
 
-        return false;
-    }
-
-    /**
-     * Counts auth failures toward suspension; endpoint retirement suspends immediately.
-     */
-    private function recordNonTransientFailure(string $webhookId, bool $countsStreak): EndpointState
-    {
-        $result = RetryableTransaction::retryable($this->connection, function () use ($webhookId, $countsStreak): array {
-            $row = $this->lockHealthRow($webhookId);
-
-            if ($row === null) {
-                $streak = $countsStreak ? 1 : 0;
-                $suspend = !$countsStreak || $this->config->nonTransientThreshold <= 1;
-                $suspended = $this->insertFreshRowForNonTransient($webhookId, $streak, $suspend);
-
-                return [$suspend ? EndpointState::Suspended : EndpointState::Healthy, $suspended];
-            }
-
-            $state = EndpointState::from((string) $row['endpoint_state']);
-
-            if ($state === EndpointState::Suspended) {
-                $suspended = $this->advanceLadderLocked($webhookId, $row, $state, alsoCountAuthStreak: $countsStreak);
-
-                return [EndpointState::Suspended, $suspended];
-            }
-
-            if ($state === EndpointState::Disabled) {
-                return [$state, false];
-            }
-
-            $streak = (int) $row['consecutive_non_transient_failures'] + ($countsStreak ? 1 : 0);
-            if (!$countsStreak || $streak >= $this->config->nonTransientThreshold) {
-                $this->suspendLocked($webhookId, $row, $state, nonTransientFailures: $streak);
-
-                return [EndpointState::Suspended, true];
-            }
-
-            if ($state === EndpointState::Degraded) {
-                // A below-threshold auth failure still counts as a failed trial.
-                $suspended = $this->advanceLadderLocked($webhookId, $row, $state, alsoCountAuthStreak: true);
-
-                return [$suspended ? EndpointState::Suspended : $state, $suspended];
-            }
-
-            $this->connection->executeStatement(
-                'UPDATE webhook_health
-                 SET consecutive_non_transient_failures = :streak, updated_at = :now
-                 WHERE webhook_id = :id',
-                ['streak' => $streak, 'now' => $this->now(), 'id' => Uuid::fromHexToBytes($webhookId)]
-            );
-            $this->mirrorBcColumns($webhookId);
-
-            return [$state, false];
-        });
-
-        $this->finishSuspension($webhookId, $result[1]);
-
-        return $result[0];
+        return null;
     }
 
     /**
@@ -858,7 +939,7 @@ class WebhookHealthService
      *
      * @param array<string, mixed> $row
      */
-    private function suspendLocked(string $webhookId, array $row, EndpointState $fromState, int $nonTransientFailures, int $entryIndex = 0): void
+    private function suspendLocked(string $webhookId, array $row, EndpointState $fromState, int $nonTransientFailures, SuspensionCause $cause, int $entryIndex = 0): WebhookSuspendedEvent
     {
         $now = $this->now();
         $since = $row['suspended_since'] !== null ? (string) $row['suspended_since'] : $now;
@@ -880,15 +961,29 @@ class WebhookHealthService
             ]
         );
         $this->mirrorBcColumns($webhookId);
+
+        $ref = $this->webhookRefOf($webhookId);
+
+        return new WebhookSuspendedEvent(
+            $webhookId,
+            $ref['appId'],
+            $fromState,
+            new \DateTimeImmutable($since),
+            $cause,
+            $ref['name'],
+            $ref['eventName'],
+            new \DateTimeImmutable($now),
+        );
     }
 
-    private function finishSuspension(string $webhookId, bool $suspended): void
+    private function finishSuspension(string $webhookId, ?WebhookSuspendedEvent $suspension): void
     {
-        if (!$suspended) {
+        if ($suspension === null) {
             return;
         }
 
         $this->outboxStore->pauseDeliveriesForWebhook($webhookId);
+        $this->dispatchBestEffort($suspension);
     }
 
     /**
@@ -915,8 +1010,82 @@ class WebhookHealthService
         }
 
         $this->mirrorBcColumns($webhookId);
+        $ref = $this->webhookRefOf($webhookId);
+        $this->dispatchBestEffort(new WebhookDegradedEvent(
+            $webhookId,
+            $ref['appId'],
+            EndpointState::Suspended,
+            $ref['name'],
+            $ref['eventName'],
+            $this->clock->now(),
+        ));
 
         return true;
+    }
+
+    /**
+     * Promotes DEGRADED to HEALTHY and dispatches after commit.
+     */
+    private function promoteDegradedToHealthy(string $webhookId, WebhookActivationTrigger $trigger): bool
+    {
+        $event = RetryableTransaction::retryable(
+            $this->connection,
+            fn (): ?WebhookActivatedEvent => $this->promoteDegradedToHealthyLocked($webhookId, $trigger)
+        );
+
+        if ($event === null) {
+            return false;
+        }
+
+        $this->dispatchBestEffort($event);
+
+        return true;
+    }
+
+    /**
+     * Promotes inside the caller's transaction without dispatching the event.
+     */
+    private function promoteDegradedToHealthyLocked(string $webhookId, WebhookActivationTrigger $trigger): ?WebhookActivatedEvent
+    {
+        $row = $this->lockHealthRow($webhookId);
+        if ($row === null || (string) $row['endpoint_state'] !== EndpointState::Degraded->value) {
+            return null;
+        }
+
+        if (!$this->resetToHealthy($webhookId, keepStreaks: $trigger === WebhookActivationTrigger::Idle)) {
+            return null;
+        }
+
+        $this->outboxStore->resumeDeliveriesForWebhook($webhookId);
+        $this->mirrorBcColumns($webhookId);
+
+        $ref = $this->webhookRefOf($webhookId);
+
+        return new WebhookActivatedEvent(
+            $webhookId,
+            $ref['appId'],
+            EndpointState::Degraded,
+            $trigger,
+            $ref['name'],
+            $ref['eventName'],
+            $this->clock->now(),
+            $this->toDateTime($row['suspended_since']),
+        );
+    }
+
+    /**
+     * @return array<string, mixed>|null the FOR-UPDATE-locked webhook_health row, or null when none exists
+     */
+    private function lockHealthRow(string $webhookId): ?array
+    {
+        $row = $this->connection->fetchAssociative(
+            'SELECT endpoint_state, consecutive_transient_failures, consecutive_non_transient_failures,
+                    degraded_cycle_count, cooldown_until, suspended_since
+             FROM webhook_health WHERE webhook_id = :id FOR UPDATE',
+            ['id' => Uuid::fromHexToBytes($webhookId)]
+        );
+
+        return \is_array($row) ? $row : null;
     }
 
     /**
@@ -970,9 +1139,45 @@ class WebhookHealthService
     }
 
     /**
+     * Creates the first health row for an operator kill.
+     */
+    private function insertFreshDisabledRow(string $webhookId): ?WebhookDisabledEvent
+    {
+        try {
+            $this->connection->executeStatement(
+                'INSERT INTO webhook_health (webhook_id, endpoint_state, disabled_since, disabled_origin, created_at, updated_at)
+                 VALUES (:id, :disabled, :now, :origin, :now, :now)',
+                [
+                    'id' => Uuid::fromHexToBytes($webhookId),
+                    'disabled' => EndpointState::Disabled->value,
+                    'now' => $this->now(),
+                    'origin' => DisabledOrigin::Operator->value,
+                ]
+            );
+        } catch (UniqueConstraintViolationException) {
+            // The caller re-locks the concurrently inserted row.
+            return null;
+        }
+
+        $this->mirrorBcColumns($webhookId);
+
+        $ref = $this->webhookRefOf($webhookId);
+
+        return new WebhookDisabledEvent(
+            $webhookId,
+            $ref['appId'],
+            EndpointState::Healthy,
+            DisabledOrigin::Operator,
+            $ref['name'],
+            $ref['eventName'],
+            $this->clock->now(),
+        );
+    }
+
+    /**
      * Creates the first health row for a non-transient failure.
      */
-    private function insertFreshRowForNonTransient(string $webhookId, int $nonTransientFailures, bool $suspend): bool
+    private function insertFreshRowForNonTransient(string $webhookId, int $nonTransientFailures, bool $suspend, SuspensionCause $cause): ?WebhookSuspendedEvent
     {
         $now = $this->now();
 
@@ -993,73 +1198,58 @@ class WebhookHealthService
             );
         } catch (UniqueConstraintViolationException) {
             // Failure streaks are evidence, not an exact ledger; losing this race is safe.
-            return false;
+            return null;
         }
 
         $this->mirrorBcColumns($webhookId);
 
-        return $suspend;
-    }
-
-    private function promoteDegradedToHealthy(string $webhookId, bool $keepFailureStreaks): bool
-    {
-        return RetryableTransaction::retryable($this->connection, function () use ($webhookId, $keepFailureStreaks): bool {
-            $row = $this->lockHealthRow($webhookId);
-            if ($row === null || (string) $row['endpoint_state'] !== EndpointState::Degraded->value) {
-                return false;
-            }
-
-            return $this->promoteDegradedToHealthyLocked($webhookId, $keepFailureStreaks);
-        });
-    }
-
-    private function promoteDegradedToHealthyLocked(string $webhookId, bool $keepFailureStreaks): bool
-    {
-        if (!$this->resetToHealthy($webhookId, $keepFailureStreaks)) {
-            return false;
+        if (!$suspend) {
+            return null;
         }
 
-        // Keep the health row locked until the backlog and BC mirror match the new state.
-        $this->outboxStore->resumeDeliveriesForWebhook($webhookId);
-        $this->mirrorBcColumns($webhookId);
+        $ref = $this->webhookRefOf($webhookId);
 
-        return true;
+        return new WebhookSuspendedEvent(
+            $webhookId,
+            $ref['appId'],
+            EndpointState::Healthy,
+            new \DateTimeImmutable($now),
+            $cause,
+            $ref['name'],
+            $ref['eventName'],
+            new \DateTimeImmutable($now),
+        );
     }
 
     /**
-     * @return array<string, mixed>|null
+     * Resets the episode; idle promotion keeps unproven failure streaks.
      */
-    private function lockHealthRow(string $webhookId): ?array
+    private function resetToHealthy(string $webhookId, bool $keepStreaks): bool
     {
-        $row = $this->connection->fetchAssociative(
-            'SELECT endpoint_state, consecutive_transient_failures, consecutive_non_transient_failures,
-                    degraded_cycle_count, cooldown_until, suspended_since
-             FROM webhook_health WHERE webhook_id = :id FOR UPDATE',
-            ['id' => Uuid::fromHexToBytes($webhookId)]
-        );
+        $streakReset = $keepStreaks
+            ? ''
+            : 'consecutive_transient_failures = 0, consecutive_non_transient_failures = 0,';
 
-        return \is_array($row) ? $row : null;
-    }
-
-    private function resetToHealthy(string $webhookId, bool $keepFailureStreaks): bool
-    {
         return $this->connection->executeStatement(
-            'UPDATE webhook_health
-             SET endpoint_state = :healthy,
-                 consecutive_transient_failures = IF(:keepFailureStreaks = 1, consecutive_transient_failures, 0),
-                 consecutive_non_transient_failures = IF(:keepFailureStreaks = 1, consecutive_non_transient_failures, 0),
-                 degraded_cycle_count = 0, cooldown_until = NULL, suspended_since = NULL,
-                 disabled_since = NULL, disabled_origin = NULL, updated_at = :now
-             WHERE webhook_id = :id AND endpoint_state <> :healthy',
+            \sprintf(
+                'UPDATE webhook_health
+                 SET endpoint_state = :healthy, %s degraded_cycle_count = 0,
+                     cooldown_until = NULL, suspended_since = NULL, disabled_since = NULL,
+                     disabled_origin = NULL, updated_at = :now
+                 WHERE webhook_id = :id AND endpoint_state <> :healthy',
+                $streakReset
+            ),
             [
                 'healthy' => EndpointState::Healthy->value,
-                'keepFailureStreaks' => (int) $keepFailureStreaks,
                 'now' => $this->now(),
                 'id' => Uuid::fromHexToBytes($webhookId),
             ]
         ) > 0;
     }
 
+    /**
+     * Derives the legacy BC columns from the current health row to avoid stale writes.
+     */
     private function mirrorBcColumns(string $webhookId): void
     {
         $this->connection->executeStatement(
@@ -1078,6 +1268,43 @@ class WebhookHealthService
                 'id' => Uuid::fromHexToBytes($webhookId),
             ]
         );
+    }
+
+    /**
+     * Lifecycle events are advisory and must not affect the committed transition.
+     */
+    private function dispatchBestEffort(object $event): void
+    {
+        try {
+            $this->eventDispatcher->dispatch($event);
+        } catch (\Throwable $e) {
+            $this->logger->warning('Webhook lifecycle event listener failed', [
+                'event' => $event::class,
+                'exception' => $e::class,
+            ]);
+        }
+    }
+
+    /**
+     * @return array{appId: ?string, name: ?string, eventName: ?string}
+     */
+    private function webhookRefOf(string $webhookId): array
+    {
+        $row = $this->connection->fetchAssociative(
+            'SELECT LOWER(HEX(app_id)) AS app_id, name, event_name FROM webhook WHERE id = :id',
+            ['id' => Uuid::fromHexToBytes($webhookId)]
+        );
+
+        return [
+            'appId' => \is_array($row) && \is_string($row['app_id']) ? $row['app_id'] : null,
+            'name' => \is_array($row) && \is_string($row['name']) ? $row['name'] : null,
+            'eventName' => \is_array($row) && \is_string($row['event_name']) ? $row['event_name'] : null,
+        ];
+    }
+
+    private function toDateTime(mixed $storageValue): ?\DateTimeImmutable
+    {
+        return \is_string($storageValue) ? new \DateTimeImmutable($storageValue) : null;
     }
 
     private function cooldownAt(int $index): string
