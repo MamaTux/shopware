@@ -5,13 +5,13 @@ namespace Shopware\Core\Framework\Webhook\Health;
 use Shopware\Core\Framework\Log\Package;
 
 /**
+ * Automation must not reactivate operator-disabled webhooks.
+ *
  * @internal
  */
 #[Package('framework')]
-enum EndpointState: string
+enum DisabledOrigin: string
 {
-    case Healthy = 'healthy';
-    case Degraded = 'degraded';
-    case Suspended = 'suspended';
-    case Disabled = 'disabled';
+    case Operator = 'operator';
+    case Escalation = 'escalation';
 }
