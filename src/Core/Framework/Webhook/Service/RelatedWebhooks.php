@@ -23,7 +23,11 @@ class RelatedWebhooks
     }
 
     /**
+     * @deprecated tag:v6.8.0 - Use per-webhook health state instead. Removed with WEBHOOKS_REWORK.
+     *
      * @param array<string, mixed> $data
+     *
+     * @phpstan-ignore shopware.deprecatedMethod (called by the legacy core delivery path; deprecation notices would pollute logs)
      */
     public function updateRelated(string $webhookId, array $data, Context $context): void
     {

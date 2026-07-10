@@ -314,6 +314,8 @@ class WebhookHealthService
      * flag is on.
      *
      * Increments error_count and applies the strategy. No-op if the webhook is missing or inactive.
+     *
+     * @phpstan-ignore shopware.deprecatedMethod (called by the legacy core delivery path; deprecation notices would pollute logs)
      */
     public function recordLegacyFailure(string $webhookId, WebhookFailureStrategy $strategy): void
     {
@@ -338,6 +340,8 @@ class WebhookHealthService
     /**
      * @deprecated tag:v6.8.0 - Pre-rework shared-counter reset. Runs only with WEBHOOKS_REWORK off and is
      * removed together with the legacy columns. With the flag on, {@see recordSuccess} owns the per-webhook reset.
+     *
+     * @phpstan-ignore shopware.deprecatedMethod (called by the legacy core delivery path; deprecation notices would pollute logs)
      */
     public function resetErrorCount(string $webhookId): void
     {
