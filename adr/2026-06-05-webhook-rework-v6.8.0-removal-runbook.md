@@ -4,6 +4,7 @@ date: 2026-06-05
 area: framework
 issue: 16565
 status: staged (not executed)
+tags: [webhook, health, deprecation, migration]
 ---
 
 # Webhook endpoint-health rework — v6.8.0 removal runbook

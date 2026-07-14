@@ -529,14 +529,12 @@ class WebhookHealthTickTest extends TestCase
         $app = (new AppEntity())->assign(['id' => $appId, 'active' => true]);
         $context = Context::createDefaultContext();
         $cursor = new \DateTimeImmutable('-4 days');
-        /** @var EventDispatcherInterface $eventDispatcher */
-        $eventDispatcher = static::getContainer()->get('event_dispatcher');
 
         $suspendedSinceBefore = $this->fetchHealthTimestamp('wh-1', 'suspended_since');
         static::assertIsString($suspendedSinceBefore);
 
-        Feature::withFeatureEnabled('WEBHOOKS_REWORK', function () use ($app, $appId, $context, $cursor, $eventDispatcher): void {
-            $eventDispatcher->dispatch(new AppDeactivatedEvent($app, $context));
+        Feature::withFeatureEnabled('WEBHOOKS_REWORK', function () use ($app, $appId, $context, $cursor): void {
+            $this->eventDispatcher->dispatch(new AppDeactivatedEvent($app, $context));
 
             $pausedAt = $this->fetchHealthTimestamp('wh-1', 'updated_at');
             static::assertIsString($pausedAt);
@@ -563,7 +561,7 @@ class WebhookHealthTickTest extends TestCase
                 ['id' => Uuid::fromHexToBytes($appId)],
             );
             $app->setActive(true);
-            $eventDispatcher->dispatch(new AppActivatedEvent($app, $context));
+            $this->eventDispatcher->dispatch(new AppActivatedEvent($app, $context));
         });
 
         $shifted = $this->fetchHealthTimestamp('wh-1', 'suspended_since');

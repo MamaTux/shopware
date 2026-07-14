@@ -60,7 +60,7 @@ class DisableWebhookOnAdminDeactivationSubscriberTest extends TestCase
     public function testDeactivatingHealthyWebhookDisablesItWithOperatorOriginAndDropsTheBacklog(): void
     {
         $this->seedWebhook('wh', active: true, errorCount: 0);
-        static::assertFalse($this->hasHealthRow('wh'));
+        $this->seedHealth('wh', EndpointState::Healthy);
         $this->seedOutboxRow('evt-queued', 'wh', held: false);
 
         $events = $this->captureDisabledEvents();
