@@ -11,10 +11,11 @@ use Shopware\Core\Framework\Webhook\WebhookDefinition;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 
 /**
- * Treats an explicit `active = false` update as an operator disable. The health service applies
- * the mirrored-value echo guard.
- *
  * @internal
+ *
+ * @codeCoverageIgnore
+ *
+ * @see \Shopware\Tests\Integration\Core\Framework\Webhook\Subscriber\DisableWebhookOnAdminDeactivationSubscriberTest
  */
 #[Package('framework')]
 class DisableWebhookOnAdminDeactivationSubscriber implements EventSubscriberInterface

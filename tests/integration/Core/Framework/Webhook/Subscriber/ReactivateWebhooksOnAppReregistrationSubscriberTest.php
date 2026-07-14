@@ -10,6 +10,7 @@ use Shopware\Core\Framework\App\AppEntity;
 use Shopware\Core\Framework\App\Event\AppUpdatedEvent;
 use Shopware\Core\Framework\App\Manifest\Manifest;
 use Shopware\Core\Framework\Context;
+use Shopware\Core\Framework\DataAbstractionLayer\Search\Criteria;
 use Shopware\Core\Framework\Feature;
 use Shopware\Core\Framework\Test\TestCaseBase\IntegrationTestBehaviour;
 use Shopware\Core\Framework\Util\Hasher;
@@ -19,8 +20,8 @@ use Shopware\Core\Framework\Webhook\Health\DisabledOrigin;
 use Shopware\Core\Framework\Webhook\Health\EndpointState;
 use Shopware\Core\Framework\Webhook\Outbox\OutboxInsert;
 use Shopware\Core\Framework\Webhook\Outbox\WebhookOutboxStore;
-use Shopware\Core\Framework\Webhook\Subscriber\ReactivateWebhooksOnAppReregistrationSubscriber;
 use Shopware\Core\Test\Stub\Framework\IdsCollection;
+use Symfony\Contracts\EventDispatcher\EventDispatcherInterface;
 
 /**
  * @internal
@@ -39,14 +40,14 @@ class ReactivateWebhooksOnAppReregistrationSubscriberTest extends TestCase
 
     private WebhookOutboxStore $outboxStore;
 
-    private ReactivateWebhooksOnAppReregistrationSubscriber $subscriber;
+    private EventDispatcherInterface $eventDispatcher;
 
     protected function setUp(): void
     {
         $this->connection = static::getContainer()->get(Connection::class);
         $this->ids = new IdsCollection();
         $this->outboxStore = static::getContainer()->get(WebhookOutboxStore::class);
-        $this->subscriber = static::getContainer()->get(ReactivateWebhooksOnAppReregistrationSubscriber::class);
+        $this->eventDispatcher = static::getContainer()->get('event_dispatcher');
     }
 
     public function testAppUpdateResetsTheAppsNonHealthyWebhooksSparingTheOperatorKill(): void
@@ -86,7 +87,7 @@ class ReactivateWebhooksOnAppReregistrationSubscriberTest extends TestCase
         ]);
 
         Feature::withFeatureEnabled('WEBHOOKS_REWORK', function () use ($appId): void {
-            $this->subscriber->reactivate($this->appUpdatedEvent($appId));
+            $this->eventDispatcher->dispatch($this->appUpdatedEvent($appId));
         });
 
         foreach (['wh-degraded', 'wh-suspended', 'wh-escalation'] as $key) {
@@ -119,7 +120,12 @@ class ReactivateWebhooksOnAppReregistrationSubscriberTest extends TestCase
 
     private function appEntity(string $appId): AppEntity
     {
-        return (new AppEntity())->assign(['id' => $appId]);
+        $app = static::getContainer()->get('app.repository')
+            ->search(new Criteria([$appId]), Context::createDefaultContext())
+            ->first();
+        static::assertInstanceOf(AppEntity::class, $app);
+
+        return $app;
     }
 
     private function manifest(): Manifest

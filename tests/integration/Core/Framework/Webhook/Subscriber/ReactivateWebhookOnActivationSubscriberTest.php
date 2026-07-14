@@ -14,6 +14,7 @@ use Shopware\Core\Framework\Feature;
 use Shopware\Core\Framework\Test\TestCaseBase\IntegrationTestBehaviour;
 use Shopware\Core\Framework\Util\Hasher;
 use Shopware\Core\Framework\Webhook\EventLog\WebhookEventLogDefinition;
+use Shopware\Core\Framework\Webhook\Health\DisabledOrigin;
 use Shopware\Core\Framework\Webhook\Health\EndpointState;
 use Shopware\Core\Framework\Webhook\Outbox\OutboxInsert;
 use Shopware\Core\Framework\Webhook\Outbox\WebhookOutboxStore;
@@ -109,6 +110,30 @@ class ReactivateWebhookOnActivationSubscriberTest extends TestCase
             $this->fetchDeliveryStatus('held-event'),
             'the held backlog must stay paused',
         );
+    }
+
+    public function testActivatingOperatorDisabledWebhookRecoversIt(): void
+    {
+        $this->seedWebhook('wh', active: false, errorCount: 2);
+        $this->seedHealth('wh', EndpointState::Disabled, [
+            'consecutive_transient_failures' => 2,
+            'disabled_since' => '2026-06-02 12:00:00.000',
+            'disabled_origin' => DisabledOrigin::Operator->value,
+        ]);
+
+        Feature::withFeatureEnabled('WEBHOOKS_REWORK', function (): void {
+            $this->webhookRepository->update(
+                [['id' => $this->ids->get('wh'), 'active' => true]],
+                Context::createDefaultContext(),
+            );
+        });
+
+        $health = $this->fetchHealthRow('wh');
+        static::assertSame(EndpointState::Healthy->value, $health['endpoint_state']);
+        static::assertSame(0, (int) $health['consecutive_transient_failures']);
+        static::assertNull($health['disabled_since']);
+        static::assertNull($health['disabled_origin']);
+        static::assertSame(['active' => 1, 'error_count' => 0], $this->fetchBcColumns('wh'));
     }
 
     private function seedWebhook(string $key, bool $active, int $errorCount): void

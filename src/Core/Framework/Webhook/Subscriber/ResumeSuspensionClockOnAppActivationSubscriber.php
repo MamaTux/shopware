@@ -9,9 +9,11 @@ use Shopware\Core\Framework\Webhook\Service\WebhookHealthService;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 
 /**
- * Adds the final paused interval when an app resumes, including periods without a health tick.
- *
  * @internal
+ *
+ * @codeCoverageIgnore
+ *
+ * @see \Shopware\Tests\Integration\Core\Framework\Webhook\Health\WebhookHealthTickTest
  */
 #[Package('framework')]
 class ResumeSuspensionClockOnAppActivationSubscriber implements EventSubscriberInterface

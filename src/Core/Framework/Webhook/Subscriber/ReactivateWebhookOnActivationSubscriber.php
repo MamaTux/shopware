@@ -12,10 +12,11 @@ use Shopware\Core\Framework\Webhook\WebhookDefinition;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 
 /**
- * Treats an explicit `active = true` update as manual recovery. The health service applies the
- * state-specific echo policy.
- *
  * @internal
+ *
+ * @codeCoverageIgnore
+ *
+ * @see \Shopware\Tests\Integration\Core\Framework\Webhook\Subscriber\ReactivateWebhookOnActivationSubscriberTest
  */
 #[Package('framework')]
 class ReactivateWebhookOnActivationSubscriber implements EventSubscriberInterface
