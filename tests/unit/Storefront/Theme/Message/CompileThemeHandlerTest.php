@@ -6,6 +6,7 @@ use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Shopware\Core\Framework\Context;
 use Shopware\Core\Framework\DataAbstractionLayer\EntityCollection;
+use Shopware\Core\Framework\DataAbstractionLayer\EntityRepository;
 use Shopware\Core\Framework\Notification\NotificationService;
 use Shopware\Core\Framework\Uuid\Uuid;
 use Shopware\Core\System\SalesChannel\SalesChannelCollection;
@@ -13,11 +14,13 @@ use Shopware\Core\System\SalesChannel\SalesChannelEntity;
 use Shopware\Core\Test\Stub\DataAbstractionLayer\StaticEntityRepository;
 use Shopware\Core\Test\TestDefaults;
 use Shopware\Storefront\Theme\ConfigLoader\AbstractConfigLoader;
+use Shopware\Storefront\Theme\Event\ThemeAssignedEvent;
 use Shopware\Storefront\Theme\Message\CompileThemeHandler;
 use Shopware\Storefront\Theme\Message\CompileThemeMessage;
 use Shopware\Storefront\Theme\StorefrontPluginRegistry;
 use Shopware\Storefront\Theme\ThemeCompiler;
 use Shopware\Storefront\Theme\ThemeRuntimeConfigService;
+use Symfony\Contracts\EventDispatcher\EventDispatcherInterface;
 
 /**
  * @internal
@@ -42,6 +45,13 @@ class CompileThemeHandlerTest extends TestCase
         /** @var StaticEntityRepository<SalesChannelCollection> $salesChannelRep */
         $salesChannelRep = new StaticEntityRepository([new EntityCollection([$scEntity])]);
 
+        // without the assign flag the relation must not be touched and no event dispatched
+        $themeSalesChannelRep = $this->createMock(EntityRepository::class);
+        $themeSalesChannelRep->expects($this->never())->method('upsert');
+
+        $eventDispatcher = $this->createMock(EventDispatcherInterface::class);
+        $eventDispatcher->expects($this->never())->method('dispatch');
+
         $handler = new CompileThemeHandler(
             $themeCompilerMock,
             static::createStub(AbstractConfigLoader::class),
@@ -49,6 +59,50 @@ class CompileThemeHandlerTest extends TestCase
             $notificationServiceMock,
             $salesChannelRep,
             static::createStub(ThemeRuntimeConfigService::class),
+            $themeSalesChannelRep,
+            $eventDispatcher,
+        );
+
+        $handler($message);
+    }
+
+    public function testHandleMessageAssignsThemeAfterCompile(): void
+    {
+        $themeCompilerMock = $this->createMock(ThemeCompiler::class);
+        $themeId = Uuid::randomHex();
+        $context = Context::createDefaultContext();
+        $message = new CompileThemeMessage(TestDefaults::SALES_CHANNEL, $themeId, true, $context, true);
+
+        $themeCompilerMock->expects($this->once())->method('compileTheme');
+
+        /** @var StaticEntityRepository<SalesChannelCollection> $salesChannelRep */
+        $salesChannelRep = new StaticEntityRepository([]);
+
+        // with the assign flag set, the relation is upserted after compilation ...
+        $themeSalesChannelRep = $this->createMock(EntityRepository::class);
+        $themeSalesChannelRep->expects($this->once())->method('upsert')->with(
+            [[
+                'themeId' => $themeId,
+                'salesChannelId' => TestDefaults::SALES_CHANNEL,
+            ]],
+            $context
+        );
+
+        // ... and the assignment event is dispatched so caches are invalidated
+        $eventDispatcher = $this->createMock(EventDispatcherInterface::class);
+        $eventDispatcher->expects($this->once())->method('dispatch')->with(
+            new ThemeAssignedEvent($themeId, TestDefaults::SALES_CHANNEL, $context)
+        );
+
+        $handler = new CompileThemeHandler(
+            $themeCompilerMock,
+            static::createStub(AbstractConfigLoader::class),
+            static::createStub(StorefrontPluginRegistry::class),
+            static::createStub(NotificationService::class),
+            $salesChannelRep,
+            static::createStub(ThemeRuntimeConfigService::class),
+            $themeSalesChannelRep,
+            $eventDispatcher,
         );
 
         $handler($message);

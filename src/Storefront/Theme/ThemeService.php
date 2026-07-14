@@ -233,6 +233,14 @@ class ThemeService implements ResetInterface
 
     public function assignTheme(string $themeId, string $salesChannelId, Context $context, bool $skipCompile = false): bool
     {
+        if (!$skipCompile && $this->isAsyncCompilation($context)) {
+            // Defer the assignment: CompileThemeHandler upserts the relation only after the
+            // new theme is compiled, so the storefront keeps serving the current theme meanwhile.
+            $this->handleAsync($salesChannelId, $themeId, true, $context, true);
+
+            return true;
+        }
+
         RetryableTransaction::transactional($this->connection, function () use ($themeId, $salesChannelId, $context, $skipCompile): void {
             if (!$skipCompile) {
                 $this->compileTheme($salesChannelId, $themeId, $context);
@@ -426,14 +434,16 @@ class ThemeService implements ResetInterface
         string $salesChannelId,
         string $themeId,
         bool $withAssets,
-        Context $context
+        Context $context,
+        bool $assign = false
     ): void {
         $this->messageBus->dispatch(
             new CompileThemeMessage(
                 $salesChannelId,
                 $themeId,
                 $withAssets,
-                $context
+                $context,
+                $assign
             )
         );
 

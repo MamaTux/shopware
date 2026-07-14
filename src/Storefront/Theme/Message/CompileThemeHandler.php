@@ -3,6 +3,8 @@
 namespace Shopware\Storefront\Theme\Message;
 
 use Shopware\Core\Framework\Context;
+use Shopware\Core\Framework\DataAbstractionLayer\Entity;
+use Shopware\Core\Framework\DataAbstractionLayer\EntityCollection;
 use Shopware\Core\Framework\DataAbstractionLayer\EntityRepository;
 use Shopware\Core\Framework\DataAbstractionLayer\Search\Criteria;
 use Shopware\Core\Framework\Log\Package;
@@ -10,12 +12,14 @@ use Shopware\Core\Framework\Notification\NotificationService;
 use Shopware\Core\Framework\Uuid\Uuid;
 use Shopware\Core\System\SalesChannel\SalesChannelCollection;
 use Shopware\Storefront\Theme\ConfigLoader\AbstractConfigLoader;
+use Shopware\Storefront\Theme\Event\ThemeAssignedEvent;
 use Shopware\Storefront\Theme\Exception\ThemeException;
 use Shopware\Storefront\Theme\StorefrontPluginRegistry;
 use Shopware\Storefront\Theme\ThemeCompilerInterface;
 use Shopware\Storefront\Theme\ThemeRuntimeConfigService;
 use Shopware\Storefront\Theme\ThemeService;
 use Symfony\Component\Messenger\Attribute\AsMessageHandler;
+use Symfony\Contracts\EventDispatcher\EventDispatcherInterface;
 
 /**
  * @internal
@@ -26,6 +30,7 @@ final readonly class CompileThemeHandler
 {
     /**
      * @param EntityRepository<SalesChannelCollection> $saleschannelRepository
+     * @param EntityRepository<EntityCollection<Entity>> $themeSalesChannelRepository
      */
     public function __construct(
         private ThemeCompilerInterface $themeCompiler,
@@ -34,6 +39,8 @@ final readonly class CompileThemeHandler
         private NotificationService $notificationService,
         private EntityRepository $saleschannelRepository,
         private ThemeRuntimeConfigService $runtimeConfigService,
+        private EntityRepository $themeSalesChannelRepository,
+        private EventDispatcherInterface $eventDispatcher,
     ) {
     }
 
@@ -57,6 +64,20 @@ final readonly class CompileThemeHandler
             false,
             $this->extensionRegistry->getConfigurations(),
         );
+
+        if ($message->isAssign()) {
+            // Theme is compiled now, so repoint the sales channel to it. Deferring the
+            // assignment until here keeps the storefront on the previous (compiled) theme
+            // during the switch instead of rendering the new one without CSS.
+            $this->themeSalesChannelRepository->upsert([[
+                'themeId' => $message->getThemeId(),
+                'salesChannelId' => $message->getSalesChannelId(),
+            ]], $message->getContext());
+
+            $this->eventDispatcher->dispatch(
+                new ThemeAssignedEvent($message->getThemeId(), $message->getSalesChannelId(), $message->getContext())
+            );
+        }
 
         if ($message->getContext()->getScope() !== Context::USER_SCOPE) {
             return;

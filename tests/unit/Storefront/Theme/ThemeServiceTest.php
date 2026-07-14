@@ -181,6 +181,49 @@ class ThemeServiceTest extends TestCase
         static::assertTrue($assigned);
     }
 
+    public function testAssignThemeDefersAssignmentWhenAsyncCompilationIsEnabled(): void
+    {
+        $themeId = Uuid::randomHex();
+
+        // async compilation enabled -> assignment is deferred to the compile handler:
+        // nothing is upserted, no event dispatched and no sync compile happens here ...
+        $this->systemConfigMock->method('get')->willReturn(true);
+
+        $themeSalesChannelRepository = $this->createMock(EntityRepository::class);
+        $themeSalesChannelRepository->expects($this->never())->method('upsert');
+
+        $eventDispatcher = $this->createMock(EventDispatcher::class);
+        $eventDispatcher->expects($this->never())->method('dispatch');
+
+        $themeCompiler = $this->createMock(ThemeCompiler::class);
+        $themeCompiler->expects($this->never())->method('compileTheme');
+
+        // ... instead a compile message carrying the assign flag is queued.
+        $dispatchedMessage = null;
+        $messageBus = $this->createMock(MessageBus::class);
+        $messageBus->expects($this->once())->method('dispatch')
+            ->willReturnCallback(static function (object $message) use (&$dispatchedMessage): Envelope {
+                $dispatchedMessage = $message;
+
+                return new Envelope($message);
+            });
+
+        $themeService = $this->getThemeService(
+            themeSalesChannelRepository: $themeSalesChannelRepository,
+            themeCompiler: $themeCompiler,
+            eventDispatcher: $eventDispatcher,
+            messageBus: $messageBus,
+        );
+
+        $assigned = $themeService->assignTheme($themeId, TestDefaults::SALES_CHANNEL, $this->context);
+
+        static::assertTrue($assigned);
+        static::assertInstanceOf(CompileThemeMessage::class, $dispatchedMessage);
+        static::assertTrue($dispatchedMessage->isAssign());
+        static::assertSame($themeId, $dispatchedMessage->getThemeId());
+        static::assertSame(TestDefaults::SALES_CHANNEL, $dispatchedMessage->getSalesChannelId());
+    }
+
     public function testCompileTheme(): void
     {
         $themeId = Uuid::randomHex();
