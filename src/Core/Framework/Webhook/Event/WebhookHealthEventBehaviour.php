@@ -2,7 +2,9 @@
 
 namespace Shopware\Core\Framework\Webhook\Event;
 
+use Shopware\Core\Content\MailTemplate\Exception\MailEventConfigurationException;
 use Shopware\Core\Framework\Context;
+use Shopware\Core\Framework\Event\EventData\MailRecipientStruct;
 use Shopware\Core\Framework\Webhook\AclPrivilegeCollection;
 
 /**
@@ -44,5 +46,15 @@ trait WebhookHealthEventBehaviour
     public function getOccurredAt(): string
     {
         return $this->occurredAt->format(\DateTimeInterface::ATOM);
+    }
+
+    public function getMailStruct(): MailRecipientStruct
+    {
+        throw new MailEventConfigurationException('Data for mailRecipientStruct not available.', self::class);
+    }
+
+    public function getSalesChannelId(): ?string
+    {
+        return null;
     }
 }
