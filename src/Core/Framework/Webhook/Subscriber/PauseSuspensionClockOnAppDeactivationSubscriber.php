@@ -9,9 +9,11 @@ use Shopware\Core\Framework\Webhook\Service\WebhookHealthService;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 
 /**
- * Pauses SUSPENDED escalation while a deactivated app cannot run recovery trials.
- *
  * @internal
+ *
+ * @codeCoverageIgnore
+ *
+ * @see \Shopware\Tests\Integration\Core\Framework\Webhook\Health\WebhookHealthTickTest
  */
 #[Package('framework')]
 class PauseSuspensionClockOnAppDeactivationSubscriber implements EventSubscriberInterface

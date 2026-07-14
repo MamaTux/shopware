@@ -11,9 +11,11 @@ use Shopware\Core\Framework\Webhook\Service\WebhookHealthService;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 
 /**
- * Resets eligible webhook health after an app install or update without undoing operator disables.
- *
  * @internal
+ *
+ * @codeCoverageIgnore
+ *
+ * @see \Shopware\Tests\Integration\Core\Framework\Webhook\Subscriber\ReactivateWebhooksOnAppReregistrationSubscriberTest
  */
 #[Package('framework')]
 class ReactivateWebhooksOnAppReregistrationSubscriber implements EventSubscriberInterface
