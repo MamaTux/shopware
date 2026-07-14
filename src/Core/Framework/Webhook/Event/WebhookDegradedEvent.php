@@ -6,6 +6,7 @@ use Shopware\Core\Framework\App\AppEntity;
 use Shopware\Core\Framework\Event\EventData\EventDataCollection;
 use Shopware\Core\Framework\Event\EventData\ScalarValueType;
 use Shopware\Core\Framework\Event\FlowEventAware;
+use Shopware\Core\Framework\Event\MailAware;
 use Shopware\Core\Framework\Log\Package;
 use Shopware\Core\Framework\Webhook\Health\EndpointState;
 use Shopware\Core\Framework\Webhook\Hookable;
@@ -14,7 +15,7 @@ use Shopware\Core\Framework\Webhook\Hookable;
  * @internal
  */
 #[Package('framework')]
-final readonly class WebhookDegradedEvent implements Hookable, FlowEventAware
+final readonly class WebhookDegradedEvent implements Hookable, FlowEventAware, MailAware
 {
     use WebhookHealthEventBehaviour;
 
@@ -36,8 +37,6 @@ final readonly class WebhookDegradedEvent implements Hookable, FlowEventAware
     }
 
     /**
-     * Never includes endpoint URLs or delivery data.
-     *
      * @return array<string, mixed>
      */
     public function getWebhookPayload(?AppEntity $app = null): array

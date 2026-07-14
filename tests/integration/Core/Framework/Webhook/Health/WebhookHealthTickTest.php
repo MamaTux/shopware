@@ -6,7 +6,11 @@ use Doctrine\DBAL\Connection;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 use Shopware\Core\Defaults;
+use Shopware\Core\Framework\App\AppEntity;
+use Shopware\Core\Framework\App\Event\AppActivatedEvent;
+use Shopware\Core\Framework\App\Event\AppDeactivatedEvent;
 use Shopware\Core\Framework\Context;
+use Shopware\Core\Framework\Feature;
 use Shopware\Core\Framework\Test\TestCaseBase\IntegrationTestBehaviour;
 use Shopware\Core\Framework\Util\Hasher;
 use Shopware\Core\Framework\Uuid\Uuid;
@@ -514,6 +518,63 @@ class WebhookHealthTickTest extends TestCase
         $cursor = $this->fetchHealthTimestamp('wh-1', 'updated_at');
         static::assertIsString($cursor);
         static::assertEqualsWithDelta((new \DateTimeImmutable())->getTimestamp(), (new \DateTimeImmutable($cursor))->getTimestamp(), 5);
+    }
+
+    public function testAppLifecycleEventsPauseAndResumeTheSuspensionClock(): void
+    {
+        $appId = $this->createApp('SwagLifecycleApp', active: true);
+        $this->createWebhook('wh-1', active: false, errorCount: 3, appId: $appId);
+        $this->insertHealth('wh-1', EndpointState::Suspended, suspendedSince: new \DateTimeImmutable('-9 days'));
+
+        $app = (new AppEntity())->assign(['id' => $appId, 'active' => true]);
+        $context = Context::createDefaultContext();
+        $cursor = new \DateTimeImmutable('-4 days');
+        /** @var EventDispatcherInterface $eventDispatcher */
+        $eventDispatcher = static::getContainer()->get('event_dispatcher');
+
+        $suspendedSinceBefore = $this->fetchHealthTimestamp('wh-1', 'suspended_since');
+        static::assertIsString($suspendedSinceBefore);
+
+        Feature::withFeatureEnabled('WEBHOOKS_REWORK', function () use ($app, $appId, $context, $cursor, $eventDispatcher): void {
+            $eventDispatcher->dispatch(new AppDeactivatedEvent($app, $context));
+
+            $pausedAt = $this->fetchHealthTimestamp('wh-1', 'updated_at');
+            static::assertIsString($pausedAt);
+            static::assertEqualsWithDelta(
+                (new \DateTimeImmutable())->getTimestamp(),
+                (new \DateTimeImmutable($pausedAt))->getTimestamp(),
+                5,
+            );
+
+            $this->connection->executeStatement(
+                'UPDATE app SET active = 0 WHERE id = :id',
+                ['id' => Uuid::fromHexToBytes($appId)],
+            );
+            $this->connection->executeStatement(
+                'UPDATE webhook_health SET updated_at = :cursor WHERE webhook_id = :id',
+                [
+                    'cursor' => $cursor->format(Defaults::STORAGE_DATE_TIME_FORMAT),
+                    'id' => $this->ids->getBytes('wh-1'),
+                ],
+            );
+
+            $this->connection->executeStatement(
+                'UPDATE app SET active = 1 WHERE id = :id',
+                ['id' => Uuid::fromHexToBytes($appId)],
+            );
+            $app->setActive(true);
+            $eventDispatcher->dispatch(new AppActivatedEvent($app, $context));
+        });
+
+        $shifted = $this->fetchHealthTimestamp('wh-1', 'suspended_since');
+        static::assertIsString($shifted);
+        $pausedSeconds = (new \DateTimeImmutable())->getTimestamp() - $cursor->getTimestamp();
+        static::assertEqualsWithDelta(
+            (new \DateTimeImmutable($suspendedSinceBefore))->getTimestamp() + $pausedSeconds,
+            (new \DateTimeImmutable($shifted))->getTimestamp(),
+            5,
+        );
+        static::assertSame(EndpointState::Suspended->value, $this->fetchEndpointState('wh-1'));
     }
 
     /**

@@ -44,21 +44,10 @@ use Symfony\Component\Messenger\Envelope;
 use Symfony\Component\Messenger\Event\WorkerMessageFailedEvent;
 
 /**
- * End-to-end dispatch coverage for the outbox transport. Two smoke tests run under
- * both `WEBHOOKS_REWORK` ON and OFF via #[DataProvider('flagStates')] to confirm the
- * happy-path and transient-failure contracts hold identically across transports:
- *  - `testAsyncWebhookIsDeliveredAndPublishesConsumerContract`
- *  - `testTransientFailureDoesNotBlockLaterMessagesOnSamePartition`
+ * End-to-end coverage for webhook delivery and its persisted state.
  *
- * The remaining tests run flag-ON only — they target outbox-specific behaviour
- * (retry-cycle, terminal failure, recovery against stale results, sync inline path,
- * insertion order, multi-webhook fan-out) where the flag-OFF leg either duplicates
- * coverage already provided by the dispatcher's own suite or relies on Messenger
- * wiring (`SendFailedMessageForRetryListener`) that `QueueTestBehaviour::runWorker()`
- * does not provide.
- *
- * Assertions target observable end-state — the outbox (`webhook_event_log`,
- * `webhook_delivery`) and the outgoing HTTP request.
+ * Tests select the feature state required by each behavior. Legacy terminal failures invoke the
+ * Messenger failure subscriber directly because QueueTestBehaviour does not wire it.
  *
  * @internal
  */

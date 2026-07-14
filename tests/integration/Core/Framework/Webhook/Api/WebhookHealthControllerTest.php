@@ -607,9 +607,6 @@ class WebhookHealthControllerTest extends TestCase
         ]);
     }
 
-    /**
-     * Creates a held row inside the resume grace period.
-     */
     private function seedHeldDelivery(string $eventKey, string $webhookKey): void
     {
         $this->connection->insert('webhook_event_log', [
