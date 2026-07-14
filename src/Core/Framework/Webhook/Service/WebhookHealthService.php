@@ -17,9 +17,14 @@ use Shopware\Core\Framework\Webhook\Health\WebhookDispatchDecision;
 use Shopware\Core\Framework\Webhook\Outbox\WebhookOutboxStore;
 use Shopware\Core\Framework\Webhook\WebhookException;
 use Shopware\Core\Framework\Webhook\WebhookFailureStrategy;
+use Shopware\Tests\Integration\Core\Framework\Webhook\Health\EndpointHealthStateMachineMatrixTest;
 
 /**
  * @internal
+ *
+ * @codeCoverageIgnore
+ *
+ * @see EndpointHealthStateMachineMatrixTest
  */
 #[Package('framework')]
 class WebhookHealthService

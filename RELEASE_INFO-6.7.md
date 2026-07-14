@@ -2,6 +2,12 @@
 
 ## Core
 
+### Experimental webhook endpoint health
+
+With `WEBHOOKS_REWORK` enabled, transient delivery failures now move a webhook from `HEALTHY` to `DEGRADED`. Regular deliveries are held until a scheduled trial succeeds.
+
+Operators can configure the transition threshold and trial cooldowns through `shopware.webhook.health.degraded_threshold_count` and `shopware.webhook.health.cooldown_schedule_seconds`. Existing webhook behavior is unchanged while the feature flag is disabled.
+
 ### Enforce "Allow payment change after checkout" when re-paying an order
 
 `Shopware\Core\Checkout\Order\SalesChannel\SetPaymentOrderRoute` now rejects payment methods whose `afterOrderEnabled` ("Allow payment change after checkout") flag is disabled, matching the methods offered on the edit-order page. Previously the flag was only applied as a UI filter, so a payment method that renders its own JavaScript payment button (e.g. PayPal smart buttons) could still be used to pay an existing order. The store-api route `POST /store-api/order/payment` now returns `CHECKOUT__ORDER_PAYMENT_METHOD_NOT_CHANGEABLE` (HTTP 403) for such methods. (shopware/shopware#17495)
