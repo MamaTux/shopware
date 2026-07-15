@@ -5,7 +5,7 @@
     "components": {
         "schemas": {
             "Criteria": {
-                "x-dto-namespace": "Shopware\\Core\\Framework\\Api\\Request",
+                "x-dto-namespace": "Shopware\\Core\\Framework\\Api\\Request\\StoreApi",
                 "x-dto-package": "framework",
                 "type": "object",
                 "description": "Search parameters. For more information, see our documentation on [Search Queries](https://shopware.stoplight.io/docs/store-api/docs/concepts/search-queries.md#structure)",
@@ -117,7 +117,7 @@
                 }
             },
             "NoneFieldsCriteria": {
-                "x-dto-namespace": "Shopware\\Core\\Framework\\Api\\Request",
+                "x-dto-namespace": "Shopware\\Core\\Framework\\Api\\Request\\StoreApi",
                 "x-dto-package": "framework",
                 "type": "object",
                 "description": "Search parameters. For more information, see our documentation on [Search Queries](https://shopware.stoplight.io/docs/store-api/docs/concepts/search-queries.md#structure)",
@@ -245,7 +245,7 @@
                 }
             },
             "Aggregation": {
-                "x-dto-namespace": "Shopware\\Core\\Framework\\Api\\Request",
+                "x-dto-namespace": "Shopware\\Core\\Framework\\Api\\Request\\StoreApi",
                 "x-dto-package": "framework",
                 "anyOf": [
                     {
@@ -343,7 +343,7 @@
                 "enum": ["none", "exact", "next-pages"]
             },
             "Query": {
-                "x-dto-namespace": "Shopware\\Core\\Framework\\Api\\Request",
+                "x-dto-namespace": "Shopware\\Core\\Framework\\Api\\Request\\StoreApi",
                 "x-dto-package": "framework",
                 "type": "object",
                 "properties": {
@@ -370,7 +370,7 @@
                 "additionalProperties": true
             },
             "Sort": {
-                "x-dto-namespace": "Shopware\\Core\\Framework\\Api\\Request",
+                "x-dto-namespace": "Shopware\\Core\\Framework\\Api\\Request\\StoreApi",
                 "x-dto-package": "framework",
                 "type": "object",
                 "properties": {
@@ -410,7 +410,7 @@
                 }
             },
             "SimpleFilter": {
-                "x-dto-namespace": "Shopware\\Core\\Framework\\Api\\Request",
+                "x-dto-namespace": "Shopware\\Core\\Framework\\Api\\Request\\StoreApi",
                 "x-dto-package": "framework",
                 "type": "object",
                 "properties": {
@@ -428,7 +428,7 @@
                 "required": ["type", "field", "value"]
             },
             "EqualsFilter": {
-                "x-dto-namespace": "Shopware\\Core\\Framework\\Api\\Request",
+                "x-dto-namespace": "Shopware\\Core\\Framework\\Api\\Request\\StoreApi",
                 "x-dto-package": "framework",
                 "type": "object",
                 "properties": {
@@ -459,7 +459,7 @@
                 "required": ["type", "field", "value"]
             },
             "MultiNotFilter": {
-                "x-dto-namespace": "Shopware\\Core\\Framework\\Api\\Request",
+                "x-dto-namespace": "Shopware\\Core\\Framework\\Api\\Request\\StoreApi",
                 "x-dto-package": "framework",
                 "type": "object",
                 "properties": {
@@ -478,7 +478,7 @@
                 "required": ["type", "operator", "queries"]
             },
             "RangeFilter": {
-                "x-dto-namespace": "Shopware\\Core\\Framework\\Api\\Request",
+                "x-dto-namespace": "Shopware\\Core\\Framework\\Api\\Request\\StoreApi",
                 "x-dto-package": "framework",
                 "type": "object",
                 "properties": {
