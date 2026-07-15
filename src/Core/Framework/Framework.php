@@ -74,16 +74,18 @@ class Framework extends Bundle
         $container->setParameter('locale', 'en-GB');
 
         $loader = new XmlFileLoader($container, new FileLocator(__DIR__ . '/DependencyInjection/'));
+        $phpLoader = new PhpFileLoader($container, new FileLocator(__DIR__ . '/DependencyInjection/'));
+
         $loader->load('services.xml');
         $loader->load('acl.xml');
         $loader->load('cache.xml');
         $loader->load('api.xml');
         $loader->load('app.xml');
         $loader->load('custom-field.xml');
-        $loader->load('data-abstraction-layer.xml');
+        $phpLoader->load('data-abstraction-layer.php');
         $loader->load('demodata.xml');
         $loader->load('event.xml');
-        $loader->load('hydrator.xml');
+        $phpLoader->load('hydrator.php');
         $loader->load('filesystem.xml');
         $loader->load('message-queue.xml');
         $loader->load('plugin.xml');
@@ -105,7 +107,6 @@ class Framework extends Bundle
         $loader->load('sso.xml');
 
         // @codeCoverageIgnoreStart
-        $phpLoader = new PhpFileLoader($container, new FileLocator(__DIR__ . '/DependencyInjection/'));
         $phpLoader->load('mcp.php');
         // @codeCoverageIgnoreEnd
 
@@ -167,7 +168,6 @@ class Framework extends Bundle
 
         \assert($this->container instanceof ContainerInterface, 'Container is not set yet, please call setContainer() before calling boot(), see `src/Core/Kernel.php:186`.');
 
-        /** @var FeatureFlagRegistry $featureFlagRegistry */
         $featureFlagRegistry = $this->container->get(FeatureFlagRegistry::class);
         $featureFlagRegistry->register();
 
@@ -176,31 +176,10 @@ class Framework extends Bundle
             MeterProvider::bindMeter($this->container);
         }
 
-        // @deprecated tag:v6.8.0 - remove this if block
-        if ($this->container->hasParameter('shopware.cache.cache_compression') && $this->container->getParameter('shopware.cache.cache_compression') !== null) {
-            Feature::triggerDeprecationOrThrow(
-                'v6.8.0.0',
-                'Parameter "shopware.cache.cache_compression" is deprecated and will be removed. Please use "shopware.cache.compress" instead.'
-            );
-
-            $this->container->setParameter('shopware.cache.compress', $this->container->getParameter('shopware.cache.cache_compression'));
-        }
-
-        // @deprecated tag:v6.8.0 - remove this if block
-        if ($this->container->hasParameter('shopware.cache.cache_compression_method') && $this->container->getParameter('shopware.cache.cache_compression_method') !== null) {
-            Feature::triggerDeprecationOrThrow(
-                'v6.8.0.0',
-                'Parameter "shopware.cache.cache_compression_method" is deprecated and will be removed. Please use "shopware.cache.compression_method" instead.'
-            );
-
-            $this->container->setParameter('shopware.cache.compression_method', $this->container->getParameter('shopware.cache.cache_compression_method'));
-        }
-
         CacheValueCompressor::$compress = $this->container->getParameter('shopware.cache.compress');
         CacheValueCompressor::$compressMethod = $this->container->getParameter('shopware.cache.compression_method');
         Feature::$emitDeprecations = $this->container->getParameter('kernel.debug');
 
-        /** @var StampedeProtectionConfigurator $stampedeProtectionConfigurator */
         $stampedeProtectionConfigurator = $this->container->get(StampedeProtectionConfigurator::class);
         $stampedeProtectionConfigurator->apply();
     }
