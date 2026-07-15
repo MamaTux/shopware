@@ -47,35 +47,54 @@ final readonly class CompileThemeHandler
     public function __invoke(CompileThemeMessage $message): void
     {
         $message->getContext()->addState(ThemeService::STATE_NO_QUEUE);
-        $themeConfig = $this->configLoader->load($message->getThemeId(), $message->getContext());
-        $this->themeCompiler->compileTheme(
-            $message->getSalesChannelId(),
-            $message->getThemeId(),
-            $themeConfig,
-            $this->extensionRegistry->getConfigurations(),
-            $message->isWithAssets(),
-            $message->getContext()
-        );
 
-        $this->runtimeConfigService->refreshRuntimeConfig(
-            $message->getThemeId(),
-            $themeConfig,
-            $message->getContext(),
-            false,
-            $this->extensionRegistry->getConfigurations(),
-        );
-
-        if ($message->isAssign()) {
-            // Compiled now, so apply the deferred assignment; until here the storefront kept
-            // serving the previous theme.
-            $this->themeSalesChannelRepository->upsert([[
-                'themeId' => $message->getThemeId(),
-                'salesChannelId' => $message->getSalesChannelId(),
-            ]], $message->getContext());
-
-            $this->eventDispatcher->dispatch(
-                new ThemeAssignedEvent($message->getThemeId(), $message->getSalesChannelId(), $message->getContext())
+        try {
+            $themeConfig = $this->configLoader->load($message->getThemeId(), $message->getContext());
+            $this->themeCompiler->compileTheme(
+                $message->getSalesChannelId(),
+                $message->getThemeId(),
+                $themeConfig,
+                $this->extensionRegistry->getConfigurations(),
+                $message->isWithAssets(),
+                $message->getContext()
             );
+
+            $this->runtimeConfigService->refreshRuntimeConfig(
+                $message->getThemeId(),
+                $themeConfig,
+                $message->getContext(),
+                false,
+                $this->extensionRegistry->getConfigurations(),
+            );
+
+            if ($message->isAssign()) {
+                // Compiled now, so apply the deferred assignment; until here the storefront kept
+                // serving the previous theme.
+                $this->themeSalesChannelRepository->upsert([[
+                    'themeId' => $message->getThemeId(),
+                    'salesChannelId' => $message->getSalesChannelId(),
+                ]], $message->getContext());
+
+                $this->eventDispatcher->dispatch(
+                    new ThemeAssignedEvent($message->getThemeId(), $message->getSalesChannelId(), $message->getContext())
+                );
+            }
+        } catch (\Throwable $e) {
+            // The API already returned and the switch is not applied. Tell the user instead of
+            // failing silently, then rethrow so the messenger can retry or dead-letter it.
+            if ($message->getContext()->getScope() === Context::USER_SCOPE) {
+                $this->notificationService->createNotification(
+                    [
+                        'id' => Uuid::randomHex(),
+                        'status' => 'error',
+                        'message' => 'sw-theme-manager.detail.asyncCompilation.error',
+                        'requiredPrivileges' => [],
+                    ],
+                    $message->getContext()
+                );
+            }
+
+            throw $e;
         }
 
         if ($message->getContext()->getScope() !== Context::USER_SCOPE) {

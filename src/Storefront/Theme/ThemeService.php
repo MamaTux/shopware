@@ -36,6 +36,12 @@ class ThemeService implements ResetInterface
     public const CONFIG_THEME_COMPILE_ASYNC = 'core.storefrontSettings.asyncThemeCompilation';
     public const STATE_NO_QUEUE = 'state-no-queue';
 
+    /**
+     * Context state opting a theme assignment into being applied only after the (background)
+     * compilation finished, so the storefront keeps serving the current theme during a switch.
+     */
+    public const STATE_DEFER_ASSIGNMENT = 'theme-defer-assignment';
+
     private bool $notified = false;
 
     /**
@@ -231,11 +237,11 @@ class ThemeService implements ResetInterface
         $this->compileThemeById($themeId, $context, null, false);
     }
 
-    public function assignTheme(string $themeId, string $salesChannelId, Context $context, bool $skipCompile = false, bool $deferCompilation = false): bool
+    public function assignTheme(string $themeId, string $salesChannelId, Context $context, bool $skipCompile = false): bool
     {
-        // Opt-in: the handler assigns the theme only after compiling it, so the storefront
-        // keeps serving the current theme during the switch. Other callers stay synchronous.
-        if ($deferCompilation && !$skipCompile && $this->isAsyncCompilation($context)) {
+        // Opt-in via STATE_DEFER_ASSIGNMENT: the handler assigns the theme only after compiling
+        // it, so the storefront keeps serving the current theme. Other callers stay synchronous.
+        if (!$skipCompile && $context->hasState(self::STATE_DEFER_ASSIGNMENT) && $this->isAsyncCompilation($context)) {
             $this->handleAsync($salesChannelId, $themeId, true, $context, true);
 
             return true;

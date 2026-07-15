@@ -4,6 +4,7 @@ namespace Shopware\Tests\Unit\Storefront\Theme\Message;
 
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
+use Shopware\Core\Framework\Api\Context\AdminApiSource;
 use Shopware\Core\Framework\Context;
 use Shopware\Core\Framework\DataAbstractionLayer\EntityCollection;
 use Shopware\Core\Framework\DataAbstractionLayer\EntityRepository;
@@ -105,6 +106,47 @@ class CompileThemeHandlerTest extends TestCase
             $eventDispatcher,
         );
 
+        $handler($message);
+    }
+
+    public function testHandleMessageNotifiesUserAndRethrowsWhenCompilationFails(): void
+    {
+        $themeId = Uuid::randomHex();
+        // AdminApiSource -> USER_SCOPE, so the failure notification is created
+        $context = Context::createDefaultContext(new AdminApiSource(Uuid::randomHex()));
+        $message = new CompileThemeMessage(TestDefaults::SALES_CHANNEL, $themeId, true, $context, true);
+
+        $themeCompiler = $this->createMock(ThemeCompiler::class);
+        $themeCompiler->method('compileTheme')->willThrowException(new \RuntimeException('compile failed'));
+
+        // the user is notified about the failed background compilation ...
+        $notificationService = $this->createMock(NotificationService::class);
+        $notificationService->expects($this->once())->method('createNotification')->with(
+            static::callback(static fn (array $notification): bool => $notification['status'] === 'error'
+                && $notification['message'] === 'sw-theme-manager.detail.asyncCompilation.error'),
+            $context
+        );
+
+        // ... the assignment must not be applied when the compile failed ...
+        $themeSalesChannelRep = $this->createMock(EntityRepository::class);
+        $themeSalesChannelRep->expects($this->never())->method('upsert');
+
+        /** @var StaticEntityRepository<SalesChannelCollection> $salesChannelRep */
+        $salesChannelRep = new StaticEntityRepository([]);
+
+        $handler = new CompileThemeHandler(
+            $themeCompiler,
+            static::createStub(AbstractConfigLoader::class),
+            static::createStub(StorefrontPluginRegistry::class),
+            $notificationService,
+            $salesChannelRep,
+            static::createStub(ThemeRuntimeConfigService::class),
+            $themeSalesChannelRep,
+            $this->createMock(EventDispatcherInterface::class),
+        );
+
+        // ... and the exception propagates so the messenger can retry / dead-letter the message
+        $this->expectException(\RuntimeException::class);
         $handler($message);
     }
 }

@@ -124,7 +124,8 @@ class ThemeController extends AbstractController
     public function assignTheme(string $themeId, string $salesChannelId, Context $context): JsonResponse
     {
         // Defer the switch until compilation finished so the storefront is never left without CSS.
-        $this->themeService->assignTheme($themeId, $salesChannelId, $context, deferCompilation: true);
+        $context->addState(ThemeService::STATE_DEFER_ASSIGNMENT);
+        $this->themeService->assignTheme($themeId, $salesChannelId, $context);
 
         return new JsonResponse([]);
     }

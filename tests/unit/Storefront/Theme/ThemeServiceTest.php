@@ -214,7 +214,8 @@ class ThemeServiceTest extends TestCase
             messageBus: $messageBus,
         );
 
-        $assigned = $themeService->assignTheme($themeId, TestDefaults::SALES_CHANNEL, $this->context, deferCompilation: true);
+        $this->context->addState(ThemeService::STATE_DEFER_ASSIGNMENT);
+        $assigned = $themeService->assignTheme($themeId, TestDefaults::SALES_CHANNEL, $this->context);
 
         static::assertTrue($assigned);
         static::assertInstanceOf(CompileThemeMessage::class, $dispatchedMessage);
