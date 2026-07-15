@@ -231,11 +231,11 @@ class ThemeService implements ResetInterface
         $this->compileThemeById($themeId, $context, null, false);
     }
 
-    public function assignTheme(string $themeId, string $salesChannelId, Context $context, bool $skipCompile = false): bool
+    public function assignTheme(string $themeId, string $salesChannelId, Context $context, bool $skipCompile = false, bool $deferCompilation = false): bool
     {
-        if (!$skipCompile && $this->isAsyncCompilation($context)) {
-            // Defer the assignment: CompileThemeHandler upserts the relation only after the
-            // new theme is compiled, so the storefront keeps serving the current theme meanwhile.
+        // Opt-in: the handler assigns the theme only after compiling it, so the storefront
+        // keeps serving the current theme during the switch. Other callers stay synchronous.
+        if ($deferCompilation && !$skipCompile && $this->isAsyncCompilation($context)) {
             $this->handleAsync($salesChannelId, $themeId, true, $context, true);
 
             return true;

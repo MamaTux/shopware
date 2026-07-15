@@ -123,7 +123,8 @@ class ThemeController extends AbstractController
     #[Route(path: '/api/_action/theme/{themeId}/assign/{salesChannelId}', name: 'api.action.theme.assign', methods: ['POST'])]
     public function assignTheme(string $themeId, string $salesChannelId, Context $context): JsonResponse
     {
-        $this->themeService->assignTheme($themeId, $salesChannelId, $context);
+        // Defer the switch until compilation finished so the storefront is never left without CSS.
+        $this->themeService->assignTheme($themeId, $salesChannelId, $context, deferCompilation: true);
 
         return new JsonResponse([]);
     }

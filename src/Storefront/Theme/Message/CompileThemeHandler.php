@@ -66,9 +66,8 @@ final readonly class CompileThemeHandler
         );
 
         if ($message->isAssign()) {
-            // Theme is compiled now, so repoint the sales channel to it. Deferring the
-            // assignment until here keeps the storefront on the previous (compiled) theme
-            // during the switch instead of rendering the new one without CSS.
+            // Compiled now, so apply the deferred assignment; until here the storefront kept
+            // serving the previous theme.
             $this->themeSalesChannelRepository->upsert([[
                 'themeId' => $message->getThemeId(),
                 'salesChannelId' => $message->getSalesChannelId(),
