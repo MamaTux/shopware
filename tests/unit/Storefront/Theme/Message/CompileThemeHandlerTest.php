@@ -116,7 +116,7 @@ class CompileThemeHandlerTest extends TestCase
         $context = Context::createDefaultContext(new AdminApiSource(Uuid::randomHex()));
         $message = new CompileThemeMessage(TestDefaults::SALES_CHANNEL, $themeId, true, $context, true);
 
-        $themeCompiler = $this->createMock(ThemeCompiler::class);
+        $themeCompiler = static::createStub(ThemeCompiler::class);
         $themeCompiler->method('compileTheme')->willThrowException(new \RuntimeException('compile failed'));
 
         // the user is notified about the failed background compilation ...
@@ -142,7 +142,7 @@ class CompileThemeHandlerTest extends TestCase
             $salesChannelRep,
             static::createStub(ThemeRuntimeConfigService::class),
             $themeSalesChannelRep,
-            $this->createMock(EventDispatcherInterface::class),
+            static::createStub(EventDispatcherInterface::class),
         );
 
         // ... and the exception propagates so the messenger can retry / dead-letter the message
