@@ -113,6 +113,7 @@
 
         <service id="Shopware\Core\Content\Flow\Dispatching\Action\GenerateDocumentAction">
             <argument type="service" id="Shopware\Core\Checkout\Document\Service\DocumentGenerator"/>
+            <argument type="service" id="Shopware\Core\Checkout\DocumentV2\Generation\DocumentGenerator"/>
             <argument type="service" id="logger"/>
 
             <tag name="flow.action" priority="620" key="action.generate.document" />
