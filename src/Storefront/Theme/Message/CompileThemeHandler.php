@@ -100,7 +100,7 @@ final readonly class CompileThemeHandler
                 $this->notificationService->createNotification(
                     [
                         'id' => Uuid::randomHex(),
-                        'status' => 'error',
+                        'status' => 'warning',
                         'message' => 'sw-theme-manager.detail.asyncCompilation.error',
                         'requiredPrivileges' => [],
                     ],

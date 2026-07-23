@@ -131,7 +131,7 @@ class CompileThemeHandlerTest extends TestCase
         // the user is notified about the failed background compilation ...
         $notificationService = $this->createMock(NotificationService::class);
         $notificationService->expects($this->once())->method('createNotification')->with(
-            static::callback(static fn (array $notification): bool => $notification['status'] === 'error'
+            static::callback(static fn (array $notification): bool => $notification['status'] === 'warning'
                 && $notification['message'] === 'sw-theme-manager.detail.asyncCompilation.error'),
             $context
         );
