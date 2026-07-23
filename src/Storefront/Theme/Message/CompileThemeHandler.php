@@ -24,8 +24,8 @@ use Symfony\Contracts\EventDispatcher\EventDispatcherInterface;
 /**
  * @internal
  */
+#[Package('discovery')]
 #[AsMessageHandler]
-#[Package('framework')]
 final readonly class CompileThemeHandler
 {
     /**
