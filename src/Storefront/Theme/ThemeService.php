@@ -42,6 +42,13 @@ class ThemeService implements ResetInterface
      */
     public const STATE_DEFER_ASSIGNMENT = 'theme-defer-assignment';
 
+    /**
+     * System config key (per sales channel) holding the most recently requested theme of a
+     * deferred switch, so a background compilation finishing out of order can detect it was
+     * superseded and must not reactivate an older theme choice.
+     */
+    public const CONFIG_KEY_PENDING_THEME = 'storefront.pendingThemeAssignment';
+
     private bool $notified = false;
 
     /**
@@ -242,6 +249,10 @@ class ThemeService implements ResetInterface
         // Opt-in via STATE_DEFER_ASSIGNMENT: the handler assigns the theme only after compiling
         // it, so the storefront keeps serving the current theme. Other callers stay synchronous.
         if (!$skipCompile && $context->hasState(self::STATE_DEFER_ASSIGNMENT) && $this->isAsyncCompilation($context)) {
+            // Record the latest requested theme (writes happen in request order) so the handler
+            // can skip a switch that a newer request has superseded, even if the background
+            // compilations finish out of order across concurrent workers.
+            $this->configService->set(self::CONFIG_KEY_PENDING_THEME, $themeId, $salesChannelId);
             $this->handleAsync($salesChannelId, $themeId, true, $context, true);
 
             return true;

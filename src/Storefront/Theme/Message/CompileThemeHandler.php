@@ -11,6 +11,7 @@ use Shopware\Core\Framework\Log\Package;
 use Shopware\Core\Framework\Notification\NotificationService;
 use Shopware\Core\Framework\Uuid\Uuid;
 use Shopware\Core\System\SalesChannel\SalesChannelCollection;
+use Shopware\Core\System\SystemConfig\SystemConfigService;
 use Shopware\Storefront\Theme\ConfigLoader\AbstractConfigLoader;
 use Shopware\Storefront\Theme\Event\ThemeAssignedEvent;
 use Shopware\Storefront\Theme\Exception\ThemeException;
@@ -41,6 +42,7 @@ final readonly class CompileThemeHandler
         private ThemeRuntimeConfigService $runtimeConfigService,
         private EntityRepository $themeSalesChannelRepository,
         private EventDispatcherInterface $eventDispatcher,
+        private SystemConfigService $systemConfigService,
     ) {
     }
 
@@ -68,6 +70,18 @@ final readonly class CompileThemeHandler
             );
 
             if ($message->isAssign()) {
+                $latestRequested = $this->systemConfigService->getString(
+                    ThemeService::CONFIG_KEY_PENDING_THEME,
+                    $message->getSalesChannelId()
+                );
+
+                // Skip if a newer switch superseded this one: with concurrent workers the
+                // compilations can finish out of order, and applying the older one would
+                // reactivate a theme the user already replaced. The latest request applies it.
+                if ($latestRequested !== '' && $latestRequested !== $message->getThemeId()) {
+                    return;
+                }
+
                 // Compiled now, so apply the deferred assignment; until here the storefront kept
                 // serving the previous theme.
                 $this->themeSalesChannelRepository->upsert([[

@@ -13,6 +13,7 @@ use Shopware\Core\Framework\Notification\NotificationService;
 use Shopware\Core\Framework\Uuid\Uuid;
 use Shopware\Core\System\SalesChannel\SalesChannelCollection;
 use Shopware\Core\System\SalesChannel\SalesChannelEntity;
+use Shopware\Core\System\SystemConfig\SystemConfigService;
 use Shopware\Core\Test\Stub\DataAbstractionLayer\StaticEntityRepository;
 use Shopware\Core\Test\TestDefaults;
 use Shopware\Storefront\Theme\ConfigLoader\AbstractConfigLoader;
@@ -64,6 +65,7 @@ class CompileThemeHandlerTest extends TestCase
             static::createStub(ThemeRuntimeConfigService::class),
             $themeSalesChannelRep,
             $eventDispatcher,
+            static::createStub(SystemConfigService::class),
         );
 
         $handler($message);
@@ -80,6 +82,10 @@ class CompileThemeHandlerTest extends TestCase
 
         /** @var StaticEntityRepository<SalesChannelCollection> $salesChannelRep */
         $salesChannelRep = new StaticEntityRepository([]);
+
+        // the theme is still the latest requested one for the sales channel
+        $systemConfigService = static::createStub(SystemConfigService::class);
+        $systemConfigService->method('getString')->willReturn($themeId);
 
         // with the assign flag set, the relation is upserted after compilation ...
         $themeSalesChannelRep = $this->createMock(EntityRepository::class);
@@ -106,6 +112,7 @@ class CompileThemeHandlerTest extends TestCase
             static::createStub(ThemeRuntimeConfigService::class),
             $themeSalesChannelRep,
             $eventDispatcher,
+            $systemConfigService,
         );
 
         $handler($message);
@@ -145,10 +152,50 @@ class CompileThemeHandlerTest extends TestCase
             static::createStub(ThemeRuntimeConfigService::class),
             $themeSalesChannelRep,
             static::createStub(EventDispatcherInterface::class),
+            static::createStub(SystemConfigService::class),
         );
 
         // ... and the exception propagates so the messenger can retry / dead-letter the message
         $this->expectException(\RuntimeException::class);
+        $handler($message);
+    }
+
+    public function testHandleMessageSkipsAssignmentWhenSupersededByNewerSwitch(): void
+    {
+        $themeId = Uuid::randomHex();
+        $context = Context::createDefaultContext();
+        $message = new CompileThemeMessage(TestDefaults::SALES_CHANNEL, $themeId, true, $context, true);
+
+        // the theme is compiled regardless ...
+        $themeCompilerMock = $this->createMock(ThemeCompiler::class);
+        $themeCompilerMock->expects($this->once())->method('compileTheme');
+
+        // ... but a newer switch to a different theme has been requested in the meantime
+        $systemConfigService = static::createStub(SystemConfigService::class);
+        $systemConfigService->method('getString')->willReturn(Uuid::randomHex());
+
+        // so this now-stale assignment must not be applied and must not dispatch the event
+        $themeSalesChannelRep = $this->createMock(EntityRepository::class);
+        $themeSalesChannelRep->expects($this->never())->method('upsert');
+
+        $eventDispatcher = $this->createMock(EventDispatcherInterface::class);
+        $eventDispatcher->expects($this->never())->method('dispatch');
+
+        /** @var StaticEntityRepository<SalesChannelCollection> $salesChannelRep */
+        $salesChannelRep = new StaticEntityRepository([]);
+
+        $handler = new CompileThemeHandler(
+            $themeCompilerMock,
+            static::createStub(AbstractConfigLoader::class),
+            static::createStub(StorefrontPluginRegistry::class),
+            static::createStub(NotificationService::class),
+            $salesChannelRep,
+            static::createStub(ThemeRuntimeConfigService::class),
+            $themeSalesChannelRep,
+            $eventDispatcher,
+            $systemConfigService,
+        );
+
         $handler($message);
     }
 }

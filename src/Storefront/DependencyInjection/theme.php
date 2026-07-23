@@ -273,6 +273,7 @@ return static function (ContainerConfigurator $containerConfigurator): void {
             service(ThemeRuntimeConfigService::class),
             service('theme_sales_channel.repository'),
             service('event_dispatcher'),
+            service(SystemConfigService::class),
         ])
         ->tag('messenger.message_handler');
 
