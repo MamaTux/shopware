@@ -50,6 +50,18 @@ final readonly class CompileThemeHandler
     {
         $message->getContext()->addState(ThemeService::STATE_NO_QUEUE);
 
+        // Skip a deferred assignment that a newer switch already superseded.
+        if ($message->isAssign()) {
+            $latestRequested = $this->systemConfigService->getString(
+                ThemeService::CONFIG_KEY_PENDING_THEME,
+                $message->getSalesChannelId()
+            );
+
+            if ($latestRequested !== '' && $latestRequested !== $message->getThemeId()) {
+                return;
+            }
+        }
+
         try {
             $themeConfig = $this->configLoader->load($message->getThemeId(), $message->getContext());
             $this->themeCompiler->compileTheme(
@@ -70,18 +82,6 @@ final readonly class CompileThemeHandler
             );
 
             if ($message->isAssign()) {
-                $latestRequested = $this->systemConfigService->getString(
-                    ThemeService::CONFIG_KEY_PENDING_THEME,
-                    $message->getSalesChannelId()
-                );
-
-                // Skip if a newer switch superseded this one: with concurrent workers the
-                // compilations can finish out of order, and applying the older one would
-                // reactivate a theme the user already replaced. The latest request applies it.
-                if ($latestRequested !== '' && $latestRequested !== $message->getThemeId()) {
-                    return;
-                }
-
                 // Compiled now, so apply the deferred assignment; until here the storefront kept
                 // serving the previous theme.
                 $this->themeSalesChannelRepository->upsert([[

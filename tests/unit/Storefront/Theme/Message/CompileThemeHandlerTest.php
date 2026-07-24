@@ -166,15 +166,16 @@ class CompileThemeHandlerTest extends TestCase
         $context = Context::createDefaultContext();
         $message = new CompileThemeMessage(TestDefaults::SALES_CHANNEL, $themeId, true, $context, true);
 
-        // the theme is compiled regardless ...
-        $themeCompilerMock = $this->createMock(ThemeCompiler::class);
-        $themeCompilerMock->expects($this->once())->method('compileTheme');
-
-        // ... but a newer switch to a different theme has been requested in the meantime
+        // a newer switch to a different theme has been requested in the meantime ...
         $systemConfigService = static::createStub(SystemConfigService::class);
         $systemConfigService->method('getString')->willReturn(Uuid::randomHex());
 
-        // so this now-stale assignment must not be applied and must not dispatch the event
+        // ... so this stale message must be skipped BEFORE compiling: compiling would rotate the
+        // shared per-sales-channel seed and break the currently assigned theme's CSS path
+        $themeCompilerMock = $this->createMock(ThemeCompiler::class);
+        $themeCompilerMock->expects($this->never())->method('compileTheme');
+
+        // and it must not be applied nor dispatch the event
         $themeSalesChannelRep = $this->createMock(EntityRepository::class);
         $themeSalesChannelRep->expects($this->never())->method('upsert');
 
