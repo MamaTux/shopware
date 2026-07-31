@@ -121,7 +121,7 @@ async function createWrapper({ featureActive = false } = {}) {
 
 describe('module/sw-flow/component/sw-flow-rule-modal', () => {
     beforeEach(() => {
-        global.activeFeatureFlags = [];
+        // CHANGE REASON: The modal feature branch is controlled by its wrapper option, not global feature state. @cleanup
         ruleConditionDataProviderServiceMock.getDeprecationsInTree.mockReturnValue([]);
     });
 
