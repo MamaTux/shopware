@@ -121,11 +121,9 @@ async function createWrapper({ featureActive = false } = {}) {
 
 describe('module/sw-flow/component/sw-flow-rule-modal', () => {
     beforeEach(() => {
-        // CHANGE REASON: The modal feature branch is controlled by its wrapper option, not global feature state. @cleanup
         ruleConditionDataProviderServiceMock.getDeprecationsInTree.mockReturnValue([]);
     });
 
-    // CHANGE REASON: This assertion exercises the fallback sw-tabs branch replaced under V6_8_0_0. @removed
     // @deprecated tag:v6.8.0.0 - The test will be removed with the legacy flow-rule tabs.
     it.deprecated('v6.8.0.0')('should show element correctly in the fallback tab branch', async () => {
         const wrapper = await createWrapper();
@@ -152,7 +150,7 @@ describe('module/sw-flow/component/sw-flow-rule-modal', () => {
         });
     });
 
-    it('should render meteor tabs when the major feature flag is active', async () => {
+    it('should render meteor tabs', async () => {
         const wrapper = await createWrapper({ featureActive: true });
         await flushPromises();
 

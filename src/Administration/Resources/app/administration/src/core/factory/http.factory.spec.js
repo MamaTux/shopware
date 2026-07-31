@@ -242,13 +242,11 @@ describe('core/factory/http.factory.js', () => {
         expect(response.data).toEqual({ success: true });
     };
 
-    // CHANGE REASON: The legacy dispatcher exposes Axios v0 as its default mock target. @removed @upgraded
     // @deprecated tag:v6.8.0.0 - The test will be removed with the Axios v0 default.
     it.deprecated('v6.8.0.0')('should support requests with useAxiosV1 flag in config', async () => {
         await supportsExplicitAxiosV0Requests(mock);
     });
 
-    // CHANGE REASON: The v6.8 dispatcher defaults to Axios v1, so the explicit v0 route needs its own adapter mock. @upgraded
     it.activeFeatureFlags(['v6.8.0.0'])('should support requests with useAxiosV1 flag in config', async () => {
         const axiosV0Mock = new MockAdapter(httpClient.axiosV0);
 
