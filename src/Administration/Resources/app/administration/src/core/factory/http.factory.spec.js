@@ -226,10 +226,10 @@ describe('core/factory/http.factory.js', () => {
         expect(mock.history.get).toHaveLength(1);
     });
 
-    it('should support requests with useAxiosV1 flag in config', async () => {
+    const supportsExplicitAxiosV0Requests = async (requestMock) => {
         // This tests that the useAxiosV1 flag is accepted without errors
         // Full integration testing of v1 routing requires more complex mock setup
-        mock.onPost('/test-with-flag').reply(200, { success: true });
+        requestMock.onPost('/test-with-flag').reply(200, { success: true });
 
         const response = await httpClient.post(
             '/test-with-flag',
@@ -240,6 +240,23 @@ describe('core/factory/http.factory.js', () => {
         );
 
         expect(response.data).toEqual({ success: true });
+    };
+
+    // CHANGE REASON: The legacy dispatcher exposes Axios v0 as its default mock target. @removed @upgraded
+    // @deprecated tag:v6.8.0.0 - The test will be removed with the Axios v0 default.
+    it.deprecated('v6.8.0.0')('should support requests with useAxiosV1 flag in config', async () => {
+        await supportsExplicitAxiosV0Requests(mock);
+    });
+
+    // CHANGE REASON: The v6.8 dispatcher defaults to Axios v1, so the explicit v0 route needs its own adapter mock. @upgraded
+    it.activeFeatureFlags(['v6.8.0.0'])('should support requests with useAxiosV1 flag in config', async () => {
+        const axiosV0Mock = new MockAdapter(httpClient.axiosV0);
+
+        try {
+            await supportsExplicitAxiosV0Requests(axiosV0Mock);
+        } finally {
+            axiosV0Mock.restore();
+        }
     });
 
     it('should have an isCancel method that detects cancellations', () => {
