@@ -16,7 +16,7 @@ readonly class ActiveAdminAppLoader
     }
 
     /**
-     * @return list<array{name: string, active: int, integrationId: string, baseUrl: string, version: string, privileges: array<string, list<string>>}>
+     * @return list<array{name: string, active: int, integrationId: string, baseUrl: string, version: string, sourceType: string, privileges: array<string, list<string>>}>
      */
     public function getActiveAdminApps(): array
     {
@@ -27,6 +27,7 @@ readonly class ActiveAdminAppLoader
     LOWER(HEX(app.integration_id)) as integrationId,
     app.base_app_url as baseUrl,
     app.version,
+    app.source_type as sourceType,
     ar.privileges as privileges
 FROM app
 LEFT JOIN acl_role ar on app.acl_role_id = ar.id
