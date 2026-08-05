@@ -20,7 +20,7 @@ readonly class ActiveAdminAppLoader
      */
     public function getActiveAdminApps(): array
     {
-        /** @var list<array{name: string, active: int, integrationId: string, baseUrl: string, version: string, privileges: ?string}> $apps */
+        /** @var list<array{name: string, active: int, integrationId: string, baseUrl: string, version: string, sourceType: string, privileges: ?string}> $apps */
         $apps = $this->connection->fetchAllAssociative('SELECT
     app.name,
     app.active,
