@@ -322,7 +322,7 @@ describe('module/sw-cms/component/sw-cms-layout-assignment-modal', () => {
         },
     );
 
-    it.each([
+    it.activeFeatureFlags(['v6.8.0.0']).each([
         'page',
         'landingpage',
     ])(
