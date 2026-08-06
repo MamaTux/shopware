@@ -2119,8 +2119,10 @@ class ElasticsearchProductTest extends TestCase
         try {
             // the plain price of the record itself, inherited from the parent when the variant has none, and
             // unaffected by rule prices: v.4.1 = 60, p.1 = 70, v.4.2 = 70, v.2.2 = 79, v.2.1 = 80 (parent),
-            // p.5 = 110 (130 for rule-a), v.6.1 = 120 (parent, 140 for rule-a)
-            $expected = array_values($ids->getList(['v.4.1', 'p.1', 'v.4.2', 'v.2.2', 'v.2.1', 'p.5', 'v.6.1']));
+            // p.5 = 110 (130 for rule-a), v.6.1 = 120 (parent, 140 for rule-a).
+            // v.8.2 = 140 (parent) and v.9.1 = 150 (parent) invert under rule-a as cheapest prices (170 and
+            // 160), so the order below only holds for the plain price
+            $expected = array_values($ids->getList(['v.4.1', 'p.1', 'v.4.2', 'v.2.2', 'v.2.1', 'p.5', 'v.6.1', 'v.8.2', 'v.9.1']));
 
             $context = $this->context;
             $searcher = $this->createEntitySearcher();
@@ -2149,6 +2151,74 @@ class ElasticsearchProductTest extends TestCase
             $result = $searcher->search($this->productDefinition, $criteria, $context);
 
             static::assertSame(array_reverse($expected), array_values($result->getIds()));
+        } catch (\Exception $e) {
+            $this->tearDown();
+
+            throw $e;
+        }
+    }
+
+    public function testPriceSortingFallsBackToTheDefaultCurrencyPrice(): void
+    {
+        $ids = self::$indexedIds;
+
+        try {
+            // p.1 has an own price in `currency` (99), v.4.1 only has a default currency price (60), which is
+            // resolved as `60 * currencyFactor` - so the factor decides the order
+            $affected = array_values($ids->getList(['p.1', 'v.4.1']));
+
+            $searcher = $this->createEntitySearcher();
+
+            $cases = [
+                ['factor' => 1.0, 'expected' => ['v.4.1', 'p.1']],
+                ['factor' => 2.0, 'expected' => ['p.1', 'v.4.1']],
+            ];
+
+            foreach ($cases as $case) {
+                $context = Context::createDefaultContext();
+                $context->assign([
+                    'currencyId' => $ids->get('currency'),
+                    'currencyFactor' => $case['factor'],
+                ]);
+
+                $criteria = new Criteria($affected);
+                $criteria->addState(Criteria::STATE_ELASTICSEARCH_AWARE);
+                $criteria->addSorting(new FieldSorting('product.price', FieldSorting::ASCENDING));
+
+                $result = $searcher->search($this->productDefinition, $criteria, $context);
+
+                static::assertSame(
+                    array_values($ids->getList($case['expected'])),
+                    array_values($result->getIds()),
+                    \sprintf('Failed for currency factor %s', $case['factor'])
+                );
+            }
+        } catch (\Exception $e) {
+            $this->tearDown();
+
+            throw $e;
+        }
+    }
+
+    public function testPriceFilterIgnoresProductsWithoutAPriceInTheRequestedCurrency(): void
+    {
+        $ids = self::$indexedIds;
+
+        try {
+            // an explicitly requested currency is not resolved through the default currency, so only the
+            // products that carry a price in it can match - the others have no price, not a price of 0
+            $criteria = new Criteria(array_values($ids->getList(['p.1', 'v.2.1', 'v.2.2', 'v.4.1', 'v.4.2'])));
+            $criteria->addState(Criteria::STATE_ELASTICSEARCH_AWARE);
+            $criteria->addFilter(new RangeFilter('product.price.' . $ids->get('currency'), [RangeFilter::GTE => 0]));
+            $criteria->addSorting(new FieldSorting('product.autoIncrement', FieldSorting::ASCENDING));
+
+            $result = $this->createEntitySearcher()->search($this->productDefinition, $criteria, $this->context);
+
+            // p.1 = 99, v.2.2 = 88 and v.4.2 = 101, while v.2.1 and v.4.1 are only priced in the default currency
+            static::assertSame(
+                array_values($ids->getList(['p.1', 'v.2.2', 'v.4.2'])),
+                array_values($result->getIds())
+            );
         } catch (\Exception $e) {
             $this->tearDown();
 

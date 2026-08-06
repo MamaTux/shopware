@@ -523,6 +523,13 @@ class ElasticsearchProductDefinitionTest extends TestCase
                     ],
                 ],
                 ],
+                ['price_fields' => [
+                    'path_match' => 'price.*.*',
+                    'mapping' => [
+                        'type' => 'double',
+                    ],
+                ],
+                ],
                 [
                     'long_to_double' => [
                         'match_mapping_type' => 'long',

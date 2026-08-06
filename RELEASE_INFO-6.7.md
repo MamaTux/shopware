@@ -103,16 +103,16 @@ The new `shopware.cdn.path_cache_buster` setting defaults to `true`, preserving 
 
 When updating an Elasticsearch/OpenSearch mapping references an analyzer/normalizer that the live index's analysis settings do not define (for example after an update introduced a new analyzer), `putMapping` fails with `analyzer [...] has not been configured in mappings`. Analysis settings are fixed at index creation and cannot be added to a live index, so this is now handled like the other unrecoverable mapping errors: the affected entity is scheduled for a reindex into a freshly created index, which rebuilds it with the current analysis settings instead of leaving the outdated mapping in place.
 
-### Sorting and filtering by `product.price` works with Elasticsearch
+### Sorting, filtering and aggregating by `product.price` works with Elasticsearch
 
-The product index now contains the product's own price (`price.c_<currencyId>.gross` / `.net`, inherited from the parent for variants). Previously only `product.cheapestPrice` was indexed, so any criteria using the plain `product.price` hit a field that did not exist:
+The product index now contains the product's own price (`price.c_<currencyId>.gross` / `.net`, inherited from the parent for variants). Only `product.cheapestPrice` used to be indexed, so a criteria using the plain `product.price` addressed a field that did not exist: sorting failed with `No mapping found for [price.c_....gross] in order to sort on` — which the default `SHOPWARE_ES_THROW_EXCEPTION=1` surfaces as an error instead of falling back to the database, so a listing sorting configured with the "Default price" criteria (Settings > Products > Sorting) broke the category page — while filters matched nothing and aggregations returned `0`.
 
-* Sorting failed with `No mapping found for [price.c_....gross] in order to sort on`. With the default `SHOPWARE_ES_THROW_EXCEPTION=1` this surfaced as an error instead of falling back to the database, so a listing sorting configured with the "Default price" criteria (Settings > Products > Sorting) broke the category page.
-* Filtering matched nothing and aggregations returned `0`, both without an error.
+Sortings, filters and metric aggregations on `product.price` now resolve the price the way the database does: the price of the context currency wins, the default currency price multiplied by the currency factor is the fallback, and the currency's rounding is applied. Two differences remain:
 
-Like the cheapest price, `product.price` is resolved by a script: the price of the context currency wins, and the default currency price multiplied by the currency factor is the fallback, with the currency's rounding applied - the same behavior the database has. A currency that is requested explicitly through the field name (`product.price.<currencyId>`) has no fallback, because its factor is only known to the database.
+* A currency requested explicitly through the field name (`product.price.<currencyId>`) is only resolved through the default currency when it is also the currency of the context, because only that factor is available without a database lookup.
+* The `listPrice` and `percentage` sub accessors (`product.price.listPrice`, `product.price.percentage`) are not indexed and remain unsupported, as does `product.purchasePrices`. They still fail with the mapping error above rather than returning a wrong result.
 
-Run `bin/console es:index` after deploying. The mapping is updated on the live index, but existing documents do not contain the price until they are reindexed; until then sorting by `product.price` treats every product as `0`.
+**Run `bin/console es:index` after deploying.** The mapping is updated on the live index, but existing documents carry no price until they are reindexed, and until then every product is treated as having no price: sortings by `product.price` place all products equally, filters on it match nothing, and aggregations over it stay empty.
 
 Note that `product.price` is the plain price of the product record itself: it ignores advanced (rule) prices and the prices of sibling variants, and is therefore not the "from" price the storefront displays for a variant listing item. `product.cheapestPrice` remains the criteria that matches the displayed price.
 

@@ -57,6 +57,8 @@ class CriteriaParserTest extends TestCase
 {
     private const SECOND_LANGUAGE = 'd5da80fc94874ea988eac8abdea44e0a';
 
+    private const DEFAULT_PRICE_ACCESSOR = 'price.c_' . Defaults::CURRENCY . '.gross';
+
     public function testAggregationWithSorting(): void
     {
         $aggs = new TermsAggregation('foo', 'test', null, new FieldSorting('abc', FieldSorting::ASCENDING), new TermsAggregation('foo', 'foo2'));
@@ -779,20 +781,77 @@ EOT,
         $this->executeCheapestPriceTest($sorting, $expectedQuery, $context, true);
     }
 
-    public function testPriceSortingBehindAssociationIsNotResolvedByScript(): void
+    /**
+     * Only `price` itself is part of the index, so every other price accessor keeps the plain field handling -
+     * which fails loudly on the missing mapping instead of silently resolving to no price.
+     */
+    #[DataProvider('providerNotIndexedPriceField')]
+    public function testSortingByANotIndexedPriceFieldIsNotResolvedByScript(string $field, string $expectedAccessor): void
     {
         $sorting = (new CriteriaParser(
             new EntityDefinitionQueryHelper(),
             static::createStub(CustomFieldService::class),
             new ArrayKeyValueStorage([]),
         ))->parseSorting(
-            new FieldSorting('product.prices.price', FieldSorting::ASCENDING),
+            new FieldSorting($field, FieldSorting::ASCENDING),
             $this->getDefinition(),
             Context::createDefaultContext()
         );
 
-        static::assertSame('prices.price.c_' . Defaults::CURRENCY . '.gross', $sorting->getField());
-        static::assertNull($sorting->getParameter('script'));
+        static::assertSame($expectedAccessor, $sorting->getField());
+        static::assertFalse($sorting->hasParameter('script'));
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function providerNotIndexedPriceField(): iterable
+    {
+        yield 'price behind an association' => [
+            'product.prices.price',
+            'prices.price.c_' . Defaults::CURRENCY . '.gross',
+        ];
+
+        yield 'another price field' => [
+            'product.purchasePrices',
+            'purchasePrices.c_' . Defaults::CURRENCY . '.gross',
+        ];
+
+        yield 'list price sub accessor' => [
+            'product.price.listPrice',
+            'price.listPrice.c_' . Defaults::CURRENCY . '.gross',
+        ];
+
+        yield 'percentage sub accessor' => [
+            'product.price.percentage',
+            'price.percentage.c_' . Defaults::CURRENCY . '.gross',
+        ];
+    }
+
+    public function testPriceStatsAggregationIsResolvedByTheSameScriptAsTheSorting(): void
+    {
+        $aggregation = (new CriteriaParser(
+            new EntityDefinitionQueryHelper(),
+            static::createStub(CustomFieldService::class),
+            new ArrayKeyValueStorage([]),
+        ))->parseAggregation(
+            new StatsAggregation('price-stats', 'product.price'),
+            $this->getDefinition(),
+            Context::createDefaultContext()
+        );
+
+        static::assertNotNull($aggregation);
+        static::assertSame(
+            [
+                'stats' => [
+                    'script' => [
+                        'lang' => 'painless',
+                        'params' => self::priceScriptParameters(),
+                    ],
+                ],
+            ],
+            self::removeScriptSource($aggregation->toArray())
+        );
     }
 
     #[DataProvider('providerTranslatedField')]
@@ -1274,10 +1333,8 @@ EOT,
             new ArrayKeyValueStorage([]),
         ))->parseFilter($filter, $definition, '', $context);
 
-        $sortedFilterArray = $sortedFilter->toArray();
-
         // Unset the 'source' key before comparison.
-        unset($sortedFilterArray['script']['script']['source']);
+        $sortedFilterArray = self::removeScriptSource($sortedFilter->toArray());
 
         static::assertEquals($expectedFilter, $sortedFilterArray);
     }
@@ -1415,54 +1472,44 @@ EOT,
 
         yield 'range filter: price' => [
             new RangeFilter('product.price', [RangeFilter::GTE => 10]),
-            [
-                'script' => [
-                    'script' => [
-                        'params' => [
-                            RangeFilter::GTE => 10.0,
-                            'accessors' => [
-                                [
-                                    'key' => 'price.c_b7d2554b0ce847cd82f3ac9bd1c0dfca.gross',
-                                    'factor' => 1,
-                                ],
-                            ],
-                            'decimals' => 100,
-                            'round' => true,
-                            'multiplier' => 100.0,
-                        ],
-                    ],
-                ],
-            ],
+            self::priceFilterQuery([RangeFilter::GTE => 10.0]),
         ];
 
         yield 'equals filter: price' => [
             new EqualsFilter('product.price', 10),
+            self::priceFilterQuery(['eq' => 10.0]),
+        ];
+
+        yield 'equals any filter: price resolves every value like an equals filter' => [
+            new EqualsAnyFilter('product.price', [10, 20]),
             [
-                'script' => [
-                    'script' => [
-                        'params' => [
-                            'eq' => 10.0,
-                            'accessors' => [
-                                [
-                                    'key' => 'price.c_b7d2554b0ce847cd82f3ac9bd1c0dfca.gross',
-                                    'factor' => 1,
-                                ],
-                            ],
-                            'decimals' => 100,
-                            'round' => true,
-                            'multiplier' => 100.0,
-                        ],
+                'bool' => [
+                    'should' => [
+                        self::priceFilterQuery(['eq' => 10.0]),
+                        self::priceFilterQuery(['eq' => 20.0]),
                     ],
                 ],
             ],
         ];
 
-        yield 'equals filter: price is null asks whether a price exists' => [
+        yield 'equals filter: price is null asks whether any accessor exists' => [
             new EqualsFilter('product.price', null),
             [
                 'bool' => [
-                    'must_not' => [
-                        ['exists' => ['field' => 'price.c_b7d2554b0ce847cd82f3ac9bd1c0dfca.gross']],
+                    'must_not' => [self::priceExistsQuery()],
+                ],
+            ],
+        ];
+
+        yield 'range filter: price behind an association keeps the plain field handling' => [
+            new RangeFilter('product.prices.price', [RangeFilter::GTE => 10]),
+            [
+                'nested' => [
+                    'path' => 'prices',
+                    'query' => [
+                        'range' => [
+                            'prices.price.c_' . Defaults::CURRENCY . '.gross' => [RangeFilter::GTE => 10],
+                        ],
                     ],
                 ],
             ],
@@ -1747,6 +1794,86 @@ if (params[\'order\'] == \'asc\') {
 
 return Double.MIN_VALUE;
 ';
+    }
+
+    /**
+     * A price filter is the price script paired with the existence of a price, so that a document without a
+     * price - which the script resolves to `0` - cannot match an upper bound or an equality.
+     *
+     * @param array<string, float> $valueParameters
+     *
+     * @return array<mixed>
+     */
+    private static function priceFilterQuery(array $valueParameters): array
+    {
+        return [
+            'bool' => [
+                'must' => [
+                    [
+                        'script' => [
+                            'script' => [
+                                'params' => array_merge($valueParameters, self::priceScriptParameters()),
+                            ],
+                        ],
+                    ],
+                    self::priceExistsQuery(),
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<mixed>
+     */
+    private static function priceExistsQuery(): array
+    {
+        return [
+            'bool' => [
+                'should' => [
+                    ['exists' => ['field' => self::DEFAULT_PRICE_ACCESSOR]],
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function priceScriptParameters(): array
+    {
+        return [
+            'accessors' => [
+                ['key' => self::DEFAULT_PRICE_ACCESSOR, 'factor' => 1],
+            ],
+            'decimals' => 100,
+            'round' => true,
+            'multiplier' => 100.0,
+        ];
+    }
+
+    /**
+     * The painless source is loaded from disk and would only bloat the expectations, so it is dropped from
+     * every script in the query - a price filter nests its script inside a bool query.
+     *
+     * @param array<mixed> $query
+     *
+     * @return array<mixed>
+     */
+    private static function removeScriptSource(array $query): array
+    {
+        foreach ($query as $key => $value) {
+            if (!\is_array($value)) {
+                continue;
+            }
+
+            if ($key === 'script') {
+                unset($value['source']);
+            }
+
+            $query[$key] = self::removeScriptSource($value);
+        }
+
+        return $query;
     }
 
     /**

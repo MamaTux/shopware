@@ -80,6 +80,11 @@ use Shopware\Elasticsearch\Sort\CountSort;
 class CriteriaParser
 {
     /**
+     * The only price field that is part of an Elasticsearch document, as `price.c_<currencyId>.<taxState>`.
+     */
+    private const INDEXED_PRICE_FIELD = 'price';
+
+    /**
      * @internal
      */
     public function __construct(
@@ -339,6 +344,19 @@ class CriteriaParser
         return $composite;
     }
 
+    /**
+     * @param array<string, mixed>|null $priceScript
+     */
+    private function createStatsAggregation(StatsAggregation $aggregation, string $fieldName, ?array $priceScript, Context $context): Metric\StatsAggregation
+    {
+        if ($priceScript === null) {
+            return $this->parseStatsAggregation($aggregation, $fieldName, $context);
+        }
+
+        /** @phpstan-ignore-next-line because of the script parameter is not shaped correctly in the opensearch php sdk */
+        return new Metric\StatsAggregation($aggregation->getName(), null, $priceScript);
+    }
+
     protected function parseStatsAggregation(StatsAggregation $aggregation, string $fieldName, Context $context): Metric\StatsAggregation
     {
         if ($this->isCheapestPriceField($aggregation->getField())) {
@@ -428,12 +446,10 @@ class CriteriaParser
      */
     private function getCheapestPriceParameters(Context $context): array
     {
-        return [
-            'accessors' => $this->getCheapestPriceAccessors($context),
-            'decimals' => 10 ** $context->getRounding()->getDecimals(),
-            'round' => $this->useCashRounding($context),
-            'multiplier' => 100 / ($context->getRounding()->getInterval() * 100),
-        ];
+        return array_merge(
+            ['accessors' => $this->getCheapestPriceAccessors($context)],
+            $this->getRoundingParameters($context)
+        );
     }
 
     private function useCashRounding(Context $context): bool
@@ -497,21 +513,20 @@ class CriteriaParser
 
     /**
      * A price is indexed per currency (`price.c_<currencyId>.<taxState>`), so it cannot be resolved by a plain
-     * field sort: like MySQL (@see PriceFieldAccessorBuilder) the price of the context currency wins, and the
-     * default currency price multiplied by the currency factor is only used as a fallback. That fallback, and
-     * the currency rounding on top of it, are resolved by the same script the cheapest price uses - it walks a
-     * list of accessor keys and returns the first one that is present in the document.
+     * field sort: like MySQL ({@see \Shopware\Core\Framework\DataAbstractionLayer\Dbal\FieldAccessorBuilder\PriceFieldAccessorBuilder})
+     * the price of the context currency wins, and the default currency price multiplied by the currency factor
+     * is only used as a fallback. That fallback, and the currency rounding on top of it, are resolved by the
+     * same script the cheapest price uses - it walks a list of accessor keys and returns the first one that is
+     * present in the document.
      *
      * @return array<string, mixed>
      */
     private function getPriceParameters(EntityDefinition $definition, string $field, Context $context): array
     {
-        return [
-            'accessors' => $this->getPriceAccessors($definition, $field, $context),
-            'decimals' => 10 ** $context->getRounding()->getDecimals(),
-            'round' => $this->useCashRounding($context),
-            'multiplier' => 100 / ($context->getRounding()->getInterval() * 100),
-        ];
+        return array_merge(
+            ['accessors' => $this->getPriceAccessors($definition, $field, $context)],
+            $this->getRoundingParameters($context)
+        );
     }
 
     /**
@@ -523,20 +538,34 @@ class CriteriaParser
 
         $accessors = [['key' => $accessor, 'factor' => 1]];
 
-        $currencyKey = 'c_' . $context->getCurrencyId();
+        // the fallback needs the factor of the currency the price is resolved for, and only the factor of the
+        // context currency is known here - the database looks the others up in the `currency` table
+        $currencyId = $this->getRequestedCurrencyId($field) ?? $context->getCurrencyId();
 
-        // no fallback for the default currency, and none for a currency that was explicitly requested through
-        // the field name: its factor is only known to the database, so it cannot be applied here
-        if ($context->getCurrencyId() === Defaults::CURRENCY || !str_contains($accessor, $currencyKey)) {
+        if ($currencyId === Defaults::CURRENCY || $currencyId !== $context->getCurrencyId()) {
             return $accessors;
         }
 
         $accessors[] = [
-            'key' => str_replace($currencyKey, 'c_' . Defaults::CURRENCY, $accessor),
+            'key' => str_replace('c_' . $currencyId, 'c_' . Defaults::CURRENCY, $accessor),
             'factor' => $context->getCurrencyFactor(),
         ];
 
         return $accessors;
+    }
+
+    /**
+     * The rounding the price scripts apply, mirroring the `ROUND()` calls the database applies to a price.
+     *
+     * @return array<string, mixed>
+     */
+    private function getRoundingParameters(Context $context): array
+    {
+        return [
+            'decimals' => 10 ** $context->getRounding()->getDecimals(),
+            'round' => $this->useCashRounding($context),
+            'multiplier' => 100 / ($context->getRounding()->getInterval() * 100),
+        ];
     }
 
     private function parseNestedAggregation(Aggregation $aggregation, EntityDefinition $definition, Context $context): AbstractAggregation
@@ -554,13 +583,23 @@ class CriteriaParser
             $fieldName = $this->getTranslatedFieldName($fieldName, $context->getLanguageId());
         }
 
+        // a price has to be resolved by the same script the sorting and the filters use, otherwise an aggregation
+        // misses the currency fallback and the rounding and contradicts the filter of the same criteria
+        $priceScript = $this->isPriceField($definition, $aggregation->getField())
+            ? array_merge($this->getScript('cheapest_price'), ['params' => $this->getPriceParameters($definition, $aggregation->getField(), $context)])
+            : null;
+
         return match (true) {
-            $aggregation instanceof StatsAggregation => $this->parseStatsAggregation($aggregation, $fieldName, $context),
-            $aggregation instanceof AvgAggregation => new Metric\AvgAggregation($aggregation->getName(), $fieldName),
+            $aggregation instanceof StatsAggregation => $this->createStatsAggregation($aggregation, $fieldName, $priceScript, $context),
+            /** @phpstan-ignore-next-line because of the script parameter is not shaped correctly in the opensearch php sdk */
+            $aggregation instanceof AvgAggregation => new Metric\AvgAggregation($aggregation->getName(), $priceScript === null ? $fieldName : null, $priceScript),
             $aggregation instanceof EntityAggregation => $this->parseEntityAggregation($aggregation, $fieldName),
-            $aggregation instanceof MaxAggregation => new Metric\MaxAggregation($aggregation->getName(), $fieldName),
-            $aggregation instanceof MinAggregation => new Metric\MinAggregation($aggregation->getName(), $fieldName),
-            $aggregation instanceof SumAggregation => new Metric\SumAggregation($aggregation->getName(), $fieldName),
+            /** @phpstan-ignore-next-line because of the script parameter is not shaped correctly in the opensearch php sdk */
+            $aggregation instanceof MaxAggregation => new Metric\MaxAggregation($aggregation->getName(), $priceScript === null ? $fieldName : null, $priceScript),
+            /** @phpstan-ignore-next-line because of the script parameter is not shaped correctly in the opensearch php sdk */
+            $aggregation instanceof MinAggregation => new Metric\MinAggregation($aggregation->getName(), $priceScript === null ? $fieldName : null, $priceScript),
+            /** @phpstan-ignore-next-line because of the script parameter is not shaped correctly in the opensearch php sdk */
+            $aggregation instanceof SumAggregation => new Metric\SumAggregation($aggregation->getName(), $priceScript === null ? $fieldName : null, $priceScript),
             $aggregation instanceof CountAggregation => new ValueCountAggregation($aggregation->getName(), $fieldName),
             $aggregation instanceof FilterAggregation => $this->parseFilterAggregation($aggregation, $definition, $context),
             $aggregation instanceof TermsAggregation => $this->parseTermsAggregation($aggregation, $fieldName, $definition, $context),
@@ -596,18 +635,19 @@ class CriteriaParser
             return $this->constructScriptQuery($scriptContent, $parameters);
         }
 
-        // a null value asks whether the price is set at all, which the generic handling below answers with an
-        // exists query - only an actual value has to be resolved through the price script
-        if ($filter->getValue() !== null && $this->isPriceField($definition, $filter->getField())) {
-            $scriptContent = $this->getScript('cheapest_price_filter');
-            $parameters = [
-                'params' => array_merge(
-                    ['eq' => (float) $filter->getValue()],
-                    $this->getPriceParameters($definition, $filter->getField(), $context)
-                ),
-            ];
+        if ($this->isPriceField($definition, $filter->getField())) {
+            // a null value asks whether the price is set at all, which is answered by the accessors alone
+            if ($filter->getValue() === null) {
+                $query = new BoolQuery();
+                $query->add(
+                    $this->createPriceExistsQuery($this->getPriceAccessors($definition, $filter->getField(), $context)),
+                    BoolQuery::MUST_NOT
+                );
 
-            return $this->constructScriptQuery($scriptContent, $parameters);
+                return $query;
+            }
+
+            return $this->createPriceFilterQuery($definition, $filter->getField(), ['eq' => (float) $filter->getValue()], $context);
         }
 
         $fieldName = $this->buildAccessor($definition, $filter->getField(), $context);
@@ -667,6 +707,23 @@ class CriteriaParser
 
     private function parseEqualsAnyFilter(EqualsAnyFilter $filter, EntityDefinition $definition, Context $context): BuilderInterface
     {
+        $values = \array_values($filter->getValue());
+
+        // a price is resolved per value, so that every value gets the currency fallback and the rounding an
+        // equals filter gets; a null value keeps the generic handling below, which answers it with an exists query
+        if (!\in_array(null, $values, true) && $this->isPriceField($definition, $filter->getField())) {
+            $query = new BoolQuery();
+
+            foreach ($values as $value) {
+                $query->add(
+                    $this->createPriceFilterQuery($definition, $filter->getField(), ['eq' => (float) $value], $context),
+                    BoolQuery::SHOULD
+                );
+            }
+
+            return $query;
+        }
+
         $fieldName = $this->buildAccessor($definition, $filter->getField(), $context);
 
         $field = $this->getField($definition, $fieldName);
@@ -834,15 +891,7 @@ class CriteriaParser
         }
 
         if ($this->isPriceField($definition, $filter->getField())) {
-            $scriptContent = $this->getScript('cheapest_price_filter');
-            $parameters = [
-                'params' => array_merge(
-                    $this->getRangeParameters($filter),
-                    $this->getPriceParameters($definition, $filter->getField(), $context)
-                ),
-            ];
-
-            return $this->constructScriptQuery($scriptContent, $parameters);
+            return $this->createPriceFilterQuery($definition, $filter->getField(), $this->getRangeParameters($filter), $context);
         }
 
         $accessor = $this->buildAccessor($definition, $filter->getField(), $context);
@@ -883,13 +932,106 @@ class CriteriaParser
     }
 
     /**
-     * Matches the plain price of an entity (`price`, `price.gross`, `price.<currencyId>.net`, ...), but not a
-     * price behind an association: those are not resolvable in a script, which cannot read nested documents.
+     * Matches the plain price of an entity (`price`, `price.gross`, `price.<currencyId>.net`, ...) - and only
+     * that: a price behind an association cannot be resolved in a script, which does not read nested documents,
+     * and any other accessor (another price field like `purchasePrices`, or a sub accessor like
+     * `price.listPrice` / `price.percentage`) is not part of the indexed price structure. Those keep the plain
+     * field handling, which fails loudly on the missing mapping instead of silently resolving to no price.
      */
     private function isPriceField(EntityDefinition $definition, string $field): bool
     {
-        return $this->getField($definition, $field) instanceof PriceField
-            && $this->getNestedPath($definition, $field) === null;
+        $parts = $this->getPriceFieldParts($definition, $field);
+
+        if (Uuid::isValid((string) end($parts))) {
+            array_pop($parts);
+        }
+
+        return $parts === [self::INDEXED_PRICE_FIELD]
+            && $this->getField($definition, $field) instanceof PriceField;
+    }
+
+    /**
+     * The currency that the field name itself asks for, e.g. `price.<currencyId>.gross`, or null when the
+     * price is resolved for the currency of the context.
+     */
+    private function getRequestedCurrencyId(string $field): ?string
+    {
+        $parts = explode('.', $field);
+
+        if (\in_array(end($parts), ['net', 'gross'], true)) {
+            array_pop($parts);
+        }
+
+        $currencyId = (string) end($parts);
+
+        return Uuid::isValid($currencyId) ? $currencyId : null;
+    }
+
+    /**
+     * The parts of a price accessor without the tax state, mirroring the parsing of {@see self::buildAccessor()}:
+     * `['price']` for `product.price.gross`, `['price', '<currencyId>']` for `product.price.<currencyId>`.
+     *
+     * @return list<string>
+     */
+    private function getPriceFieldParts(EntityDefinition $definition, string $field): array
+    {
+        $parts = explode('.', $field);
+
+        if ($parts[0] === $definition->getEntityName()) {
+            array_shift($parts);
+        }
+
+        if (\in_array(end($parts), ['net', 'gross'], true)) {
+            array_pop($parts);
+        }
+
+        return $parts;
+    }
+
+    /**
+     * A document that carries none of the accessors has no price at all, which the price script resolves to `0`
+     * like the cheapest price does. The database compares against `NULL` there, so the script is paired with the
+     * existence of a price - otherwise an upper bound or an equality would match every price-less document.
+     *
+     * @param array<string, mixed> $script
+     * @param array<string, mixed> $parameters
+     * @param list<array<string, string|float>> $accessors
+     */
+    private function createPriceQuery(array $script, array $parameters, array $accessors): BuilderInterface
+    {
+        $query = new BoolQuery();
+        $query->add($this->constructScriptQuery($script, $parameters), BoolQuery::MUST);
+        $query->add($this->createPriceExistsQuery($accessors), BoolQuery::MUST);
+
+        return $query;
+    }
+
+    /**
+     * @param list<array<string, string|float>> $accessors
+     */
+    private function createPriceExistsQuery(array $accessors): BoolQuery
+    {
+        $query = new BoolQuery();
+
+        foreach ($accessors as $accessor) {
+            $query->add(new ExistsQuery((string) $accessor['key']), BoolQuery::SHOULD);
+        }
+
+        return $query;
+    }
+
+    /**
+     * @param array<string, mixed> $parameters
+     */
+    private function createPriceFilterQuery(EntityDefinition $definition, string $field, array $parameters, Context $context): BuilderInterface
+    {
+        $priceParameters = $this->getPriceParameters($definition, $field, $context);
+
+        return $this->createPriceQuery(
+            $this->getScript('cheapest_price_filter'),
+            ['params' => array_merge($parameters, $priceParameters)],
+            $priceParameters['accessors']
+        );
     }
 
     /**
@@ -913,6 +1055,10 @@ class CriteriaParser
         }
 
         if ($filter instanceof NotEqualsFilter && $filter->getValue() === null) {
+            if ($this->isPriceField($definition, $filter->getField())) {
+                return $this->createPriceExistsQuery($this->getPriceAccessors($definition, $filter->getField(), $context));
+            }
+
             return new ExistsQuery(
                 $this->buildAccessor($definition, $filter->getField(), $context)
             );
@@ -1217,39 +1363,29 @@ class CriteriaParser
         return new ScriptQuery($script['source'], $parameters);
     }
 
+    /**
+     * @param array<string, mixed> $parameters
+     */
+    private function createScriptSort(string $scriptName, string $direction, array $parameters): FieldSort
+    {
+        return new FieldSort('_script', $direction, null, [
+            'type' => 'number',
+            'script' => array_merge($this->getScript($scriptName), ['params' => $parameters]),
+        ]);
+    }
+
     private function buildFieldSort(FieldSorting $sorting, EntityDefinition $definition, Context $context): FieldSort
     {
         if ($this->isCheapestPriceField($sorting->getField())) {
-            $scriptContent = $this->getScript('cheapest_price');
-
-            return new FieldSort('_script', $sorting->getDirection(), null, [
-                'type' => 'number',
-                'script' => array_merge($scriptContent, [
-                    'params' => $this->getCheapestPriceParameters($context),
-                ]),
-            ]);
+            return $this->createScriptSort('cheapest_price', $sorting->getDirection(), $this->getCheapestPriceParameters($context));
         }
 
         if ($this->isCheapestPriceField($sorting->getField(), true)) {
-            $scriptContent = $this->getScript('cheapest_price_percentage');
-
-            return new FieldSort('_script', $sorting->getDirection(), null, [
-                'type' => 'number',
-                'script' => array_merge($scriptContent, [
-                    'params' => ['accessors' => $this->getCheapestPriceAccessors($context, true)],
-                ]),
-            ]);
+            return $this->createScriptSort('cheapest_price_percentage', $sorting->getDirection(), ['accessors' => $this->getCheapestPriceAccessors($context, true)]);
         }
 
         if ($this->isPriceField($definition, $sorting->getField())) {
-            $scriptContent = $this->getScript('cheapest_price');
-
-            return new FieldSort('_script', $sorting->getDirection(), null, [
-                'type' => 'number',
-                'script' => array_merge($scriptContent, [
-                    'params' => $this->getPriceParameters($definition, $sorting->getField(), $context),
-                ]),
-            ]);
+            return $this->createScriptSort('cheapest_price', $sorting->getDirection(), $this->getPriceParameters($definition, $sorting->getField(), $context));
         }
 
         $field = $this->helper->getField($sorting->getField(), $definition, $definition->getEntityName(), false);

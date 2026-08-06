@@ -164,6 +164,14 @@ class ElasticsearchProductDefinition extends AbstractElasticsearchDefinition
                     ],
                 ],
                 [
+                    // without it the price would be detected as a 32 bit float, which cannot hold every price
+                    // to the cent, unlike the cheapest price and the price of the admin index
+                    'price_fields' => [
+                        'path_match' => 'price.*.*',
+                        'mapping' => ['type' => 'double'],
+                    ],
+                ],
+                [
                     'long_to_double' => [
                         'match_mapping_type' => 'long',
                         'mapping' => ['type' => 'double'],
