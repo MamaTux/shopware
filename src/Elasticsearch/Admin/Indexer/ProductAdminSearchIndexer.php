@@ -29,6 +29,7 @@ use Shopware\Core\Framework\Plugin\Exception\DecorationPatternException;
 use Shopware\Core\Framework\Uuid\Uuid;
 use Shopware\Elasticsearch\Framework\AbstractElasticsearchDefinition;
 use Shopware\Elasticsearch\Framework\ElasticsearchFieldBuilder;
+use Shopware\Elasticsearch\Framework\ElasticsearchFieldMapper;
 use Shopware\Elasticsearch\Framework\ElasticsearchIndexingUtils;
 
 #[Package('inventory')]
@@ -666,19 +667,7 @@ SQL,
             return null;
         }
 
-        $result = [];
-        foreach ($prices as $key => $priceData) {
-            if (!\is_array($priceData) || !isset($priceData['gross'])) {
-                continue;
-            }
-
-            $currencyId = \is_string($key) && str_starts_with($key, 'c') ? substr($key, 1) : $key;
-
-            $result['c_' . $currencyId] = [
-                'gross' => (float) $priceData['gross'],
-                'net' => (float) ($priceData['net'] ?? 0),
-            ];
-        }
+        $result = ElasticsearchFieldMapper::price($prices);
 
         return $result !== [] ? $result : null;
     }

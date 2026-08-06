@@ -72,6 +72,7 @@ use Shopware\Core\Framework\Uuid\Uuid;
 use Shopware\Core\System\CustomField\CustomFieldService;
 use Shopware\Elasticsearch\ElasticsearchException;
 use Shopware\Elasticsearch\Framework\ElasticsearchDateHistogramAggregation;
+use Shopware\Elasticsearch\Framework\ElasticsearchFieldMapper;
 use Shopware\Elasticsearch\Framework\ElasticsearchHelper;
 use Shopware\Elasticsearch\Product\ElasticsearchOptimizeSwitch;
 use Shopware\Elasticsearch\Sort\CountSort;
@@ -131,7 +132,7 @@ class CriteriaParser
             array_pop($parts);
         }
 
-        $parts[] = 'c_' . $currencyId;
+        $parts[] = ElasticsearchFieldMapper::PRICE_CURRENCY_PREFIX . $currencyId;
         $parts[] = $taxState;
 
         return implode('.', $parts);
@@ -344,19 +345,6 @@ class CriteriaParser
         return $composite;
     }
 
-    /**
-     * @param array<string, mixed>|null $priceScript
-     */
-    private function createStatsAggregation(StatsAggregation $aggregation, string $fieldName, ?array $priceScript, Context $context): Metric\StatsAggregation
-    {
-        if ($priceScript === null) {
-            return $this->parseStatsAggregation($aggregation, $fieldName, $context);
-        }
-
-        /** @phpstan-ignore-next-line because of the script parameter is not shaped correctly in the opensearch php sdk */
-        return new Metric\StatsAggregation($aggregation->getName(), null, $priceScript);
-    }
-
     protected function parseStatsAggregation(StatsAggregation $aggregation, string $fieldName, Context $context): Metric\StatsAggregation
     {
         if ($this->isCheapestPriceField($aggregation->getField())) {
@@ -439,6 +427,19 @@ class CriteriaParser
             $fieldName,
             $aggregation->getRanges()
         );
+    }
+
+    /**
+     * @param array<string, mixed>|null $priceScript
+     */
+    private function createStatsAggregation(StatsAggregation $aggregation, string $fieldName, ?array $priceScript, Context $context): Metric\StatsAggregation
+    {
+        if ($priceScript === null) {
+            return $this->parseStatsAggregation($aggregation, $fieldName, $context);
+        }
+
+        /** @phpstan-ignore-next-line because of the script parameter is not shaped correctly in the opensearch php sdk */
+        return new Metric\StatsAggregation($aggregation->getName(), null, $priceScript);
     }
 
     /**
@@ -547,7 +548,11 @@ class CriteriaParser
         }
 
         $accessors[] = [
-            'key' => str_replace('c_' . $currencyId, 'c_' . Defaults::CURRENCY, $accessor),
+            'key' => str_replace(
+                ElasticsearchFieldMapper::PRICE_CURRENCY_PREFIX . $currencyId,
+                ElasticsearchFieldMapper::PRICE_CURRENCY_PREFIX . Defaults::CURRENCY,
+                $accessor
+            ),
             'factor' => $context->getCurrencyFactor(),
         ];
 
@@ -1385,6 +1390,20 @@ class CriteriaParser
         }
 
         if ($this->isPriceField($definition, $sorting->getField())) {
+            $accessors = $this->getPriceAccessors($definition, $sorting->getField(), $context);
+
+            // Without a fallback there is nothing for the script to choose between, and the rounding it applies
+            // on top of the price cannot change the order, because it is monotonic. So the price is sorted by
+            // its doc values, which lets Elasticsearch skip documents that cannot reach the requested page -
+            // a script sort has to be evaluated for every document instead. `missing` and `unmapped_type` keep
+            // the reading of a document without a price the script has, which is a price of 0.
+            if (\count($accessors) === 1) {
+                return new FieldSort((string) $accessors[0]['key'], $sorting->getDirection(), null, [
+                    'missing' => 0,
+                    'unmapped_type' => 'double',
+                ]);
+            }
+
             return $this->createScriptSort('cheapest_price', $sorting->getDirection(), $this->getPriceParameters($definition, $sorting->getField(), $context));
         }
 

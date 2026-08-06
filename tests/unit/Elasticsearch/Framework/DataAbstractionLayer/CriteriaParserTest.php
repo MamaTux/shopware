@@ -772,13 +772,44 @@ EOT,
         $this->executeCheapestPriceTest($sorting, $expectedQuery, $context, true);
     }
 
-    /**
-     * @param array<mixed> $expectedQuery
-     */
-    #[DataProvider('providerPrice')]
-    public function testPriceSorting(FieldSorting $sorting, array $expectedQuery, Context $context): void
+    #[DataProvider('providerPriceSorting')]
+    public function testPriceSorting(FieldSorting $sorting, string $expectedAccessor, Context $context): void
     {
-        $this->executeCheapestPriceTest($sorting, $expectedQuery, $context, true);
+        $sort = (new CriteriaParser(
+            new EntityDefinitionQueryHelper(),
+            static::createStub(CustomFieldService::class),
+            new ArrayKeyValueStorage([]),
+        ))->parseSorting($sorting, $this->getDefinition(), $context);
+
+        // a price without a fallback is sorted by its doc values, the script is only needed to choose between
+        // the accessors - a document without a price keeps the price of 0 the script reads it as
+        static::assertSame($expectedAccessor, $sort->getField());
+        static::assertFalse($sort->hasParameter('script'));
+        static::assertSame(['missing' => 0, 'unmapped_type' => 'double'], $sort->getParameters());
+    }
+
+    public function testPriceSortingWithACurrencyFallbackIsResolvedByScript(): void
+    {
+        $context = Context::createDefaultContext();
+        $context->assign(['currencyId' => 'foo', 'currencyFactor' => 1.5]);
+
+        $this->executeCheapestPriceTest(
+            new FieldSorting('product.price', FieldSorting::ASCENDING),
+            [
+                'lang' => 'painless',
+                'params' => [
+                    'accessors' => [
+                        ['key' => 'price.c_foo.gross', 'factor' => 1],
+                        ['key' => self::DEFAULT_PRICE_ACCESSOR, 'factor' => 1.5],
+                    ],
+                    'decimals' => 100,
+                    'round' => true,
+                    'multiplier' => 100.0,
+                ],
+            ],
+            $context,
+            true
+        );
     }
 
     /**
@@ -1021,135 +1052,44 @@ EOT,
     }
 
     /**
-     * @return iterable<string, array{FieldSorting, array<mixed>, Context}>
+     * @return iterable<string, array{FieldSorting, string, Context}>
      */
-    public static function providerPrice(): iterable
+    public static function providerPriceSorting(): iterable
     {
         yield 'default price' => [
             new FieldSorting('product.price', FieldSorting::ASCENDING),
-            [
-                'lang' => 'painless',
-                'params' => [
-                    'accessors' => [
-                        [
-                            'key' => 'price.c_b7d2554b0ce847cd82f3ac9bd1c0dfca.gross',
-                            'factor' => 1,
-                        ],
-                    ],
-                    'decimals' => 100,
-                    'round' => true,
-                    'multiplier' => 100.0,
-                ],
-            ],
+            self::DEFAULT_PRICE_ACCESSOR,
             Context::createDefaultContext(),
         ];
 
         yield 'default price without entity prefix' => [
             new FieldSorting('price', FieldSorting::ASCENDING),
-            [
-                'lang' => 'painless',
-                'params' => [
-                    'accessors' => [
-                        [
-                            'key' => 'price.c_b7d2554b0ce847cd82f3ac9bd1c0dfca.gross',
-                            'factor' => 1,
-                        ],
-                    ],
-                    'decimals' => 100,
-                    'round' => true,
-                    'multiplier' => 100.0,
-                ],
-            ],
+            self::DEFAULT_PRICE_ACCESSOR,
             Context::createDefaultContext(),
         ];
 
         yield 'default price with explicit tax state' => [
             new FieldSorting('product.price.net', FieldSorting::ASCENDING),
-            [
-                'lang' => 'painless',
-                'params' => [
-                    'accessors' => [
-                        [
-                            'key' => 'price.c_b7d2554b0ce847cd82f3ac9bd1c0dfca.net',
-                            'factor' => 1,
-                        ],
-                    ],
-                    'decimals' => 100,
-                    'round' => true,
-                    'multiplier' => 100.0,
-                ],
-            ],
+            'price.c_' . Defaults::CURRENCY . '.net',
             Context::createDefaultContext(),
-        ];
-
-        $context = Context::createDefaultContext();
-        $context->assign(['currencyId' => 'foo', 'currencyFactor' => 1.5]);
-
-        yield 'different currency falls back to the default currency price' => [
-            new FieldSorting('product.price', FieldSorting::ASCENDING),
-            [
-                'lang' => 'painless',
-                'params' => [
-                    'accessors' => [
-                        [
-                            'key' => 'price.c_foo.gross',
-                            'factor' => 1,
-                        ],
-                        [
-                            'key' => 'price.c_b7d2554b0ce847cd82f3ac9bd1c0dfca.gross',
-                            'factor' => 1.5,
-                        ],
-                    ],
-                    'decimals' => 100,
-                    'round' => true,
-                    'multiplier' => 100.0,
-                ],
-            ],
-            $context,
-        ];
-
-        $context = Context::createDefaultContext();
-        $context->assign(['currencyId' => 'foo', 'currencyFactor' => 1.5]);
-
-        yield 'explicitly requested currency is used without a fallback' => [
-            new FieldSorting('product.price.0197c1f4a2b47eeaa4a2b2a1b3c4d5e6.gross', FieldSorting::ASCENDING),
-            [
-                'lang' => 'painless',
-                'params' => [
-                    'accessors' => [
-                        [
-                            'key' => 'price.c_0197c1f4a2b47eeaa4a2b2a1b3c4d5e6.gross',
-                            'factor' => 1,
-                        ],
-                    ],
-                    'decimals' => 100,
-                    'round' => true,
-                    'multiplier' => 100.0,
-                ],
-            ],
-            $context,
         ];
 
         $context = Context::createDefaultContext();
         $context->assign(['taxState' => CartPrice::TAX_STATE_NET]);
         $context->getRounding()->setRoundForNet(false);
 
-        yield 'default price: net rounding disabled' => [
+        yield 'net price of a net context' => [
             new FieldSorting('product.price', FieldSorting::ASCENDING),
-            [
-                'lang' => 'painless',
-                'params' => [
-                    'accessors' => [
-                        [
-                            'key' => 'price.c_b7d2554b0ce847cd82f3ac9bd1c0dfca.net',
-                            'factor' => 1,
-                        ],
-                    ],
-                    'decimals' => 100,
-                    'round' => false,
-                    'multiplier' => 100.0,
-                ],
-            ],
+            'price.c_' . Defaults::CURRENCY . '.net',
+            $context,
+        ];
+
+        $context = Context::createDefaultContext();
+        $context->assign(['currencyId' => 'foo', 'currencyFactor' => 1.5]);
+
+        yield 'explicitly requested currency has no fallback to choose from' => [
+            new FieldSorting('product.price.0197c1f4a2b47eeaa4a2b2a1b3c4d5e6.gross', FieldSorting::ASCENDING),
+            'price.c_0197c1f4a2b47eeaa4a2b2a1b3c4d5e6.gross',
             $context,
         ];
     }

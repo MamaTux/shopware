@@ -12,11 +12,51 @@ use Shopware\Core\System\CustomField\CustomFieldTypes;
 class ElasticsearchFieldMapper
 {
     /**
+     * The prefix a price is keyed by in an index, in front of the currency id. It differs from the `c` prefix
+     * of the database on purpose: the accessor of a nested field is built by joining the parts with a dot, so
+     * the currency needs a prefix that cannot collide with a property name.
+     */
+    public const PRICE_CURRENCY_PREFIX = 'c_';
+
+    /**
      * @internal
      */
     public function __construct(
         private readonly ElasticsearchIndexingUtils $indexingUtils
     ) {
+    }
+
+    /**
+     * Maps a price as it is stored in the database - keyed by `c<currencyId>` - to the structure it is indexed
+     * as: `c_<currencyId>` holding the `gross` and the `net` price, matching the accessor that
+     * {@see \Shopware\Elasticsearch\Framework\DataAbstractionLayer\CriteriaParser::buildAccessor()} builds.
+     *
+     * A currency without both prices is skipped: a price that cannot be compared is worse than no price at
+     * all, because the missing one is recognizable as such.
+     *
+     * @param array<string, array{gross?: float|string, net?: float|string}> $price
+     *
+     * @return array<string, array{gross: float, net: float}>
+     */
+    public static function price(array $price): array
+    {
+        $mapped = [];
+
+        foreach ($price as $currency => $taxes) {
+            if (!isset($taxes['gross'], $taxes['net'])) {
+                continue;
+            }
+
+            // only the single `c` prefix is stripped - a currency id is hex and may start with a `c` itself
+            $currencyId = str_starts_with($currency, 'c') ? substr($currency, 1) : $currency;
+
+            $mapped[self::PRICE_CURRENCY_PREFIX . $currencyId] = [
+                'gross' => (float) $taxes['gross'],
+                'net' => (float) $taxes['net'],
+            ];
+        }
+
+        return $mapped;
     }
 
     /**

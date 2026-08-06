@@ -347,7 +347,7 @@ class ElasticsearchProductDefinition extends AbstractElasticsearchDefinition
                 'metaTitle' => ElasticsearchFieldMapper::translated(field: 'metaTitle', items: $translation),
                 'metaDescription' => ElasticsearchFieldMapper::translated(field: 'metaDescription', items: $translation),
                 'customSearchKeywords' => ElasticsearchFieldMapper::translated(field: 'customSearchKeywords', items: $translation),
-                'price' => $this->mapPrice(ElasticsearchIndexingUtils::parseJson($item, 'price')),
+                'price' => ElasticsearchFieldMapper::price(ElasticsearchIndexingUtils::parseJson($item, 'price')),
                 ...$this->mapCheapestPrice(ElasticsearchIndexingUtils::parseJson($item, 'cheapest_price_accessor')),
                 ...$visibilitiesFlatten,
             ];
@@ -611,35 +611,6 @@ SQL;
                 $key = 'cheapest_price_' . $rule . '_' . $currency . '_net_percentage';
                 $mapped[$key] = $taxes['percentage']['net'];
             }
-        }
-
-        return $mapped;
-    }
-
-    /**
-     * The database keys the price by `c<currencyId>`, the index uses `c_<currencyId>` to match the accessor
-     * built by `CriteriaParser::buildAccessor()`.
-     *
-     * @param array<string, array{gross?: float, net?: float}> $price
-     *
-     * @return array<string, array{gross: float, net: float}>
-     */
-    private function mapPrice(array $price): array
-    {
-        $mapped = [];
-
-        foreach ($price as $currency => $taxes) {
-            if (!isset($taxes['gross'], $taxes['net'])) {
-                continue;
-            }
-
-            // only strip the single `c` prefix - a currency id is hex and may start with a `c` itself
-            $currencyId = str_starts_with($currency, 'c') ? substr($currency, 1) : $currency;
-
-            $mapped['c_' . $currencyId] = [
-                'gross' => (float) $taxes['gross'],
-                'net' => (float) $taxes['net'],
-            ];
         }
 
         return $mapped;
