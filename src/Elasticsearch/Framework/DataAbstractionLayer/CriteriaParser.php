@@ -495,6 +495,50 @@ class CriteriaParser
         return $accessors;
     }
 
+    /**
+     * A price is indexed per currency (`price.c_<currencyId>.<taxState>`), so it cannot be resolved by a plain
+     * field sort: like MySQL (@see PriceFieldAccessorBuilder) the price of the context currency wins, and the
+     * default currency price multiplied by the currency factor is only used as a fallback. That fallback, and
+     * the currency rounding on top of it, are resolved by the same script the cheapest price uses - it walks a
+     * list of accessor keys and returns the first one that is present in the document.
+     *
+     * @return array<string, mixed>
+     */
+    private function getPriceParameters(EntityDefinition $definition, string $field, Context $context): array
+    {
+        return [
+            'accessors' => $this->getPriceAccessors($definition, $field, $context),
+            'decimals' => 10 ** $context->getRounding()->getDecimals(),
+            'round' => $this->useCashRounding($context),
+            'multiplier' => 100 / ($context->getRounding()->getInterval() * 100),
+        ];
+    }
+
+    /**
+     * @return list<array<string, string|float>>
+     */
+    private function getPriceAccessors(EntityDefinition $definition, string $field, Context $context): array
+    {
+        $accessor = $this->buildAccessor($definition, $field, $context);
+
+        $accessors = [['key' => $accessor, 'factor' => 1]];
+
+        $currencyKey = 'c_' . $context->getCurrencyId();
+
+        // no fallback for the default currency, and none for a currency that was explicitly requested through
+        // the field name: its factor is only known to the database, so it cannot be applied here
+        if ($context->getCurrencyId() === Defaults::CURRENCY || !str_contains($accessor, $currencyKey)) {
+            return $accessors;
+        }
+
+        $accessors[] = [
+            'key' => str_replace($currencyKey, 'c_' . Defaults::CURRENCY, $accessor),
+            'factor' => $context->getCurrencyFactor(),
+        ];
+
+        return $accessors;
+    }
+
     private function parseNestedAggregation(Aggregation $aggregation, EntityDefinition $definition, Context $context): AbstractAggregation
     {
         $fieldName = $this->buildAccessor($definition, $aggregation->getField(), $context);
@@ -547,6 +591,20 @@ class CriteriaParser
                     'eq' => $filter->getValue() === null ? null : (float) $filter->getValue(),
                     'accessors' => $this->getCheapestPriceAccessors($context, true),
                 ],
+            ];
+
+            return $this->constructScriptQuery($scriptContent, $parameters);
+        }
+
+        // a null value asks whether the price is set at all, which the generic handling below answers with an
+        // exists query - only an actual value has to be resolved through the price script
+        if ($filter->getValue() !== null && $this->isPriceField($definition, $filter->getField())) {
+            $scriptContent = $this->getScript('cheapest_price_filter');
+            $parameters = [
+                'params' => array_merge(
+                    ['eq' => (float) $filter->getValue()],
+                    $this->getPriceParameters($definition, $filter->getField(), $context)
+                ),
             ];
 
             return $this->constructScriptQuery($scriptContent, $parameters);
@@ -775,6 +833,18 @@ class CriteriaParser
             return $this->constructScriptQuery($scriptContent, $parameters);
         }
 
+        if ($this->isPriceField($definition, $filter->getField())) {
+            $scriptContent = $this->getScript('cheapest_price_filter');
+            $parameters = [
+                'params' => array_merge(
+                    $this->getRangeParameters($filter),
+                    $this->getPriceParameters($definition, $filter->getField(), $context)
+                ),
+            ];
+
+            return $this->constructScriptQuery($scriptContent, $parameters);
+        }
+
         $accessor = $this->buildAccessor($definition, $filter->getField(), $context);
 
         $field = $this->getField($definition, $filter->getField());
@@ -810,6 +880,16 @@ class CriteriaParser
         }
 
         return \in_array($field, $haystack, true);
+    }
+
+    /**
+     * Matches the plain price of an entity (`price`, `price.gross`, `price.<currencyId>.net`, ...), but not a
+     * price behind an association: those are not resolvable in a script, which cannot read nested documents.
+     */
+    private function isPriceField(EntityDefinition $definition, string $field): bool
+    {
+        return $this->getField($definition, $field) instanceof PriceField
+            && $this->getNestedPath($definition, $field) === null;
     }
 
     /**
@@ -1157,6 +1237,17 @@ class CriteriaParser
                 'type' => 'number',
                 'script' => array_merge($scriptContent, [
                     'params' => ['accessors' => $this->getCheapestPriceAccessors($context, true)],
+                ]),
+            ]);
+        }
+
+        if ($this->isPriceField($definition, $sorting->getField())) {
+            $scriptContent = $this->getScript('cheapest_price');
+
+            return new FieldSort('_script', $sorting->getDirection(), null, [
+                'type' => 'number',
+                'script' => array_merge($scriptContent, [
+                    'params' => $this->getPriceParameters($definition, $sorting->getField(), $context),
                 ]),
             ]);
         }

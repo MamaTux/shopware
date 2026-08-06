@@ -11,6 +11,7 @@ use PHPUnit\Framework\TestCase;
 use Shopware\Core\Checkout\Cart\Price\Struct\CartPrice;
 use Shopware\Core\Content\Product\Aggregate\ProductManufacturer\ProductManufacturerDefinition;
 use Shopware\Core\Content\Product\Aggregate\ProductManufacturerTranslation\ProductManufacturerTranslationDefinition;
+use Shopware\Core\Content\Product\Aggregate\ProductPrice\ProductPriceDefinition;
 use Shopware\Core\Content\Product\Aggregate\ProductTranslation\ProductTranslationDefinition;
 use Shopware\Core\Content\Product\ProductDefinition;
 use Shopware\Core\Defaults;
@@ -769,6 +770,31 @@ EOT,
         $this->executeCheapestPriceTest($sorting, $expectedQuery, $context, true);
     }
 
+    /**
+     * @param array<mixed> $expectedQuery
+     */
+    #[DataProvider('providerPrice')]
+    public function testPriceSorting(FieldSorting $sorting, array $expectedQuery, Context $context): void
+    {
+        $this->executeCheapestPriceTest($sorting, $expectedQuery, $context, true);
+    }
+
+    public function testPriceSortingBehindAssociationIsNotResolvedByScript(): void
+    {
+        $sorting = (new CriteriaParser(
+            new EntityDefinitionQueryHelper(),
+            static::createStub(CustomFieldService::class),
+            new ArrayKeyValueStorage([]),
+        ))->parseSorting(
+            new FieldSorting('product.prices.price', FieldSorting::ASCENDING),
+            $this->getDefinition(),
+            Context::createDefaultContext()
+        );
+
+        static::assertSame('prices.price.c_' . Defaults::CURRENCY . '.gross', $sorting->getField());
+        static::assertNull($sorting->getParameter('script'));
+    }
+
     #[DataProvider('providerTranslatedField')]
     public function testTranslatedFieldSorting(FieldSorting $sorting, FieldSort $expectedFieldSort, ?Field $customField = null): void
     {
@@ -923,6 +949,140 @@ EOT,
                     'accessors' => [
                         [
                             'key' => 'cheapest_price_ruledefault_currencyb7d2554b0ce847cd82f3ac9bd1c0dfca_net',
+                            'factor' => 1,
+                        ],
+                    ],
+                    'decimals' => 100,
+                    'round' => false,
+                    'multiplier' => 100.0,
+                ],
+            ],
+            $context,
+        ];
+    }
+
+    /**
+     * @return iterable<string, array{FieldSorting, array<mixed>, Context}>
+     */
+    public static function providerPrice(): iterable
+    {
+        yield 'default price' => [
+            new FieldSorting('product.price', FieldSorting::ASCENDING),
+            [
+                'lang' => 'painless',
+                'params' => [
+                    'accessors' => [
+                        [
+                            'key' => 'price.c_b7d2554b0ce847cd82f3ac9bd1c0dfca.gross',
+                            'factor' => 1,
+                        ],
+                    ],
+                    'decimals' => 100,
+                    'round' => true,
+                    'multiplier' => 100.0,
+                ],
+            ],
+            Context::createDefaultContext(),
+        ];
+
+        yield 'default price without entity prefix' => [
+            new FieldSorting('price', FieldSorting::ASCENDING),
+            [
+                'lang' => 'painless',
+                'params' => [
+                    'accessors' => [
+                        [
+                            'key' => 'price.c_b7d2554b0ce847cd82f3ac9bd1c0dfca.gross',
+                            'factor' => 1,
+                        ],
+                    ],
+                    'decimals' => 100,
+                    'round' => true,
+                    'multiplier' => 100.0,
+                ],
+            ],
+            Context::createDefaultContext(),
+        ];
+
+        yield 'default price with explicit tax state' => [
+            new FieldSorting('product.price.net', FieldSorting::ASCENDING),
+            [
+                'lang' => 'painless',
+                'params' => [
+                    'accessors' => [
+                        [
+                            'key' => 'price.c_b7d2554b0ce847cd82f3ac9bd1c0dfca.net',
+                            'factor' => 1,
+                        ],
+                    ],
+                    'decimals' => 100,
+                    'round' => true,
+                    'multiplier' => 100.0,
+                ],
+            ],
+            Context::createDefaultContext(),
+        ];
+
+        $context = Context::createDefaultContext();
+        $context->assign(['currencyId' => 'foo', 'currencyFactor' => 1.5]);
+
+        yield 'different currency falls back to the default currency price' => [
+            new FieldSorting('product.price', FieldSorting::ASCENDING),
+            [
+                'lang' => 'painless',
+                'params' => [
+                    'accessors' => [
+                        [
+                            'key' => 'price.c_foo.gross',
+                            'factor' => 1,
+                        ],
+                        [
+                            'key' => 'price.c_b7d2554b0ce847cd82f3ac9bd1c0dfca.gross',
+                            'factor' => 1.5,
+                        ],
+                    ],
+                    'decimals' => 100,
+                    'round' => true,
+                    'multiplier' => 100.0,
+                ],
+            ],
+            $context,
+        ];
+
+        $context = Context::createDefaultContext();
+        $context->assign(['currencyId' => 'foo', 'currencyFactor' => 1.5]);
+
+        yield 'explicitly requested currency is used without a fallback' => [
+            new FieldSorting('product.price.0197c1f4a2b47eeaa4a2b2a1b3c4d5e6.gross', FieldSorting::ASCENDING),
+            [
+                'lang' => 'painless',
+                'params' => [
+                    'accessors' => [
+                        [
+                            'key' => 'price.c_0197c1f4a2b47eeaa4a2b2a1b3c4d5e6.gross',
+                            'factor' => 1,
+                        ],
+                    ],
+                    'decimals' => 100,
+                    'round' => true,
+                    'multiplier' => 100.0,
+                ],
+            ],
+            $context,
+        ];
+
+        $context = Context::createDefaultContext();
+        $context->assign(['taxState' => CartPrice::TAX_STATE_NET]);
+        $context->getRounding()->setRoundForNet(false);
+
+        yield 'default price: net rounding disabled' => [
+            new FieldSorting('product.price', FieldSorting::ASCENDING),
+            [
+                'lang' => 'painless',
+                'params' => [
+                    'accessors' => [
+                        [
+                            'key' => 'price.c_b7d2554b0ce847cd82f3ac9bd1c0dfca.net',
                             'factor' => 1,
                         ],
                     ],
@@ -1253,6 +1413,61 @@ EOT,
             ],
         ];
 
+        yield 'range filter: price' => [
+            new RangeFilter('product.price', [RangeFilter::GTE => 10]),
+            [
+                'script' => [
+                    'script' => [
+                        'params' => [
+                            RangeFilter::GTE => 10.0,
+                            'accessors' => [
+                                [
+                                    'key' => 'price.c_b7d2554b0ce847cd82f3ac9bd1c0dfca.gross',
+                                    'factor' => 1,
+                                ],
+                            ],
+                            'decimals' => 100,
+                            'round' => true,
+                            'multiplier' => 100.0,
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        yield 'equals filter: price' => [
+            new EqualsFilter('product.price', 10),
+            [
+                'script' => [
+                    'script' => [
+                        'params' => [
+                            'eq' => 10.0,
+                            'accessors' => [
+                                [
+                                    'key' => 'price.c_b7d2554b0ce847cd82f3ac9bd1c0dfca.gross',
+                                    'factor' => 1,
+                                ],
+                            ],
+                            'decimals' => 100,
+                            'round' => true,
+                            'multiplier' => 100.0,
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        yield 'equals filter: price is null asks whether a price exists' => [
+            new EqualsFilter('product.price', null),
+            [
+                'bool' => [
+                    'must_not' => [
+                        ['exists' => ['field' => 'price.c_b7d2554b0ce847cd82f3ac9bd1c0dfca.gross']],
+                    ],
+                ],
+            ],
+        ];
+
         yield 'range filter: cheapestPrice price/list price percentage' => [
             new RangeFilter('cheapestPrice.percentage', [RangeFilter::GTE => 10]),
             [
@@ -1322,6 +1537,7 @@ EOT,
         $instanceRegistry = new StaticDefinitionInstanceRegistry(
             [
                 ProductDefinition::class,
+                ProductPriceDefinition::class,
                 ProductManufacturerDefinition::class,
                 ProductManufacturerTranslationDefinition::class,
                 UnitDefinition::class,

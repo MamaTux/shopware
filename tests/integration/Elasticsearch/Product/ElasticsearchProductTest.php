@@ -886,26 +886,29 @@ class ElasticsearchProductTest extends TestCase
             static::assertContains($data->get('m2'), $result->getKeys());
             static::assertContains($data->get('m3'), $result->getKeys());
 
+            // product-1
             $bucket = $result->get($data->get('m1'));
             static::assertNotNull($bucket);
             static::assertSame(1, $bucket->getCount());
             $price = $bucket->getResult();
             static::assertInstanceOf(SumResult::class, $price);
-            static::assertSame(0.0, $price->getSum());
+            static::assertSame(50.0, $price->getSum());
 
+            // product-2, product-3 and product-4
             $bucket = $result->get($data->get('m2'));
             static::assertNotNull($bucket);
             static::assertSame(3, $bucket->getCount());
             $price = $bucket->getResult();
             static::assertInstanceOf(SumResult::class, $price);
-            static::assertSame(0.0, $price->getSum());
+            static::assertSame(450.0, $price->getSum());
 
+            // product-5 and product-6
             $bucket = $result->get($data->get('m3'));
             static::assertNotNull($bucket);
             static::assertSame(2, $bucket->getCount());
             $price = $bucket->getResult();
             static::assertInstanceOf(SumResult::class, $price);
-            static::assertSame(0.0, $price->getSum());
+            static::assertSame(550.0, $price->getSum());
         } catch (\Exception $e) {
             $this->tearDown();
 
@@ -2106,6 +2109,74 @@ class ElasticsearchProductTest extends TestCase
     {
         foreach (require __DIR__ . '/Fixture/CheapestPriceSorting.php' as $name => $data) {
             yield $name => $data;
+        }
+    }
+
+    public function testPriceSorting(): void
+    {
+        $ids = self::$indexedIds;
+
+        try {
+            // the plain price of the record itself, inherited from the parent when the variant has none, and
+            // unaffected by rule prices: v.4.1 = 60, p.1 = 70, v.4.2 = 70, v.2.2 = 79, v.2.1 = 80 (parent),
+            // p.5 = 110 (130 for rule-a), v.6.1 = 120 (parent, 140 for rule-a)
+            $expected = array_values($ids->getList(['v.4.1', 'p.1', 'v.4.2', 'v.2.2', 'v.2.1', 'p.5', 'v.6.1']));
+
+            $context = $this->context;
+            $searcher = $this->createEntitySearcher();
+
+            // the same order with and without rules: unlike the cheapest price, the plain price never depends
+            // on the rules of the context
+            foreach ([[], ['rule-a']] as $rules) {
+                $context->setRuleIds($ids->getList($rules));
+
+                $criteria = new Criteria($expected);
+                $criteria->addState(Criteria::STATE_ELASTICSEARCH_AWARE);
+                $criteria->addSorting(new FieldSorting('product.price', FieldSorting::ASCENDING));
+                // autoIncrement breaks the 70€ tie, productNumber cannot (see assertSorting())
+                $criteria->addSorting(new FieldSorting('product.autoIncrement', FieldSorting::ASCENDING));
+
+                $result = $searcher->search($this->productDefinition, $criteria, $context);
+
+                static::assertSame($expected, array_values($result->getIds()), \sprintf('Failed for rules `%s`', implode(', ', $rules) ?: 'none'));
+            }
+
+            $criteria = new Criteria($expected);
+            $criteria->addState(Criteria::STATE_ELASTICSEARCH_AWARE);
+            $criteria->addSorting(new FieldSorting('product.price', FieldSorting::DESCENDING));
+            $criteria->addSorting(new FieldSorting('product.autoIncrement', FieldSorting::DESCENDING));
+
+            $result = $searcher->search($this->productDefinition, $criteria, $context);
+
+            static::assertSame(array_reverse($expected), array_values($result->getIds()));
+        } catch (\Exception $e) {
+            $this->tearDown();
+
+            throw $e;
+        }
+    }
+
+    public function testPriceRangeFilter(): void
+    {
+        $ids = self::$indexedIds;
+
+        try {
+            $criteria = new Criteria(array_values($ids->getList(['v.4.1', 'p.1', 'v.4.2', 'v.2.2', 'v.2.1'])));
+            $criteria->addState(Criteria::STATE_ELASTICSEARCH_AWARE);
+            $criteria->addFilter(new RangeFilter('product.price', [RangeFilter::GTE => 70, RangeFilter::LTE => 79]));
+            $criteria->addSorting(new FieldSorting('product.autoIncrement', FieldSorting::ASCENDING));
+
+            $result = $this->createEntitySearcher()->search($this->productDefinition, $criteria, $this->context);
+
+            // p.1 = 70, v.2.2 = 79 and v.4.2 = 70 match, v.4.1 = 60 and v.2.1 = 80 (parent) do not
+            static::assertSame(
+                array_values($ids->getList(['p.1', 'v.2.2', 'v.4.2'])),
+                array_values($result->getIds())
+            );
+        } catch (\Exception $e) {
+            $this->tearDown();
+
+            throw $e;
         }
     }
 

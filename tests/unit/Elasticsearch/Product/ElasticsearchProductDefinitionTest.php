@@ -313,6 +313,7 @@ class ElasticsearchProductDefinitionTest extends TestCase
             'properties' => [
                 'id' => AbstractElasticsearchDefinition::KEYWORD_FIELD,
                 'parentId' => AbstractElasticsearchDefinition::KEYWORD_FIELD,
+                'price' => ['type' => 'object', 'dynamic' => true],
                 'parent' => [
                     'type' => 'nested',
                     'properties' => [
@@ -780,6 +781,16 @@ class ElasticsearchProductDefinitionTest extends TestCase
             static::assertSame($price, $document[$key]);
         }
 
+        // keyed by `c_<currencyId>` to match the accessor built by CriteriaParser, and the `c` prefix of the
+        // database key is only stripped once - the currency id of the second price starts with a `c` itself
+        static::assertSame(
+            [
+                'c_b7d2554b0ce847cd82f3ac9bd1c0dfca' => ['gross' => 10.0, 'net' => 8.0],
+                'c_c0d2554b0ce847cd82f3ac9bd1c0dfca' => ['gross' => 20.0, 'net' => 16.0],
+            ],
+            $document['price']
+        );
+
         static::assertSame(
             [
                 '809c1844f4734243b6aa04aba860cd45',
@@ -1108,6 +1119,7 @@ class ElasticsearchProductDefinitionTest extends TestCase
                     'coverId' => null,
                     'childCount' => 0,
                     'cheapest_price_accessor' => '{"rule-1": {"b7d2554b0ce847cd82f3ac9bd1c0dfca": {"gross": 5, "net": 4}, "b7d2554b0ce847cd82f3ac9bd1c0dfc2": {"gross": 5, "net": 4, "percentage": {"gross": 1, "net": 2}}}}',
+                    'price' => '{"cb7d2554b0ce847cd82f3ac9bd1c0dfca": {"net": 8, "gross": 10, "linked": true, "currencyId": "b7d2554b0ce847cd82f3ac9bd1c0dfca"}, "cc0d2554b0ce847cd82f3ac9bd1c0dfca": {"net": 16, "gross": 20, "linked": true, "currencyId": "c0d2554b0ce847cd82f3ac9bd1c0dfca"}}',
                     'visibilities' => '[{"visibility": 20, "salesChannelId": "sc-2"}, {"visibility": 20, "salesChannelId": "sc-2"}, {"visibility": 20, "salesChannelId": "sc-2"}, {"visibility": 30, "salesChannelId": "sc-1"}, {"visibility": 30, "salesChannelId": "sc-1"}, {"visibility": 20, "salesChannelId": "sc-2"}]',
                     'propertyIds' => '["809c1844f4734243b6aa04aba860cd45", "e4a08f9dd88f4a228240de7107e4ae4b"]',
                     'optionIds' => '["809c1844f4734243b6aa04aba860cd45", "e4a08f9dd88f4a228240de7107e4ae4b"]',
