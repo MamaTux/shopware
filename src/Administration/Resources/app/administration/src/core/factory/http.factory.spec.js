@@ -242,7 +242,7 @@ describe('core/factory/http.factory.js', () => {
         expect(response.data).toEqual({ success: true });
     };
 
-    // @deprecated tag:v6.8.0.0 - The test will be removed with the Axios v0 default.
+    // @deprecated tag:v6.8.0 - The test will be removed with the Axios v0 default.
     it.deprecated('v6.8.0.0')('should support requests with useAxiosV1 flag in config', async () => {
         await supportsExplicitAxiosV0Requests(mock);
     });

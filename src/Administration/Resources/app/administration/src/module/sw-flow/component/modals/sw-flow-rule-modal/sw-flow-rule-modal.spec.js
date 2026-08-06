@@ -114,7 +114,7 @@ describe('module/sw-flow/component/sw-flow-rule-modal', () => {
         ruleConditionDataProviderServiceMock.getDeprecationsInTree.mockReturnValue([]);
     });
 
-    // @deprecated tag:v6.8.0.0 - The test will be removed with the legacy flow-rule tabs.
+    // @deprecated tag:v6.8.0 - The test will be removed with the legacy flow-rule tabs.
     it.deprecated('v6.8.0.0')('should show element correctly in the fallback tab branch', async () => {
         const wrapper = await createWrapper();
         await flushPromises();
