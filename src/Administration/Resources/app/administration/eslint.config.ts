@@ -555,7 +555,6 @@ export default [
             'jest/expect-expect': [
                 'error',
                 {
-                    // Shared assertion helpers are named expect*, so calling one counts as asserting.
                     assertFunctionNames: [
                         'expect',
                         'expect*',
