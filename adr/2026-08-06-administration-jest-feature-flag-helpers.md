@@ -70,14 +70,12 @@ Three rules follow from this:
    marks a test whose subject is being removed, and the registered test name gains a
    `(removed in <version>)` suffix so a skipped test explains itself in the reporter output.
 
-Run the suite with the major flags on via `composer admin:unit:major`.
-
 ## Consequences
 
 Legacy and post-major expectations can live side by side in one file, each stating which world it
 belongs to, and both suites can be green at the same time.
 
-Deprecated tests become greppable. `@deprecated tag:v6.8.0.0` next to `it.deprecated('v6.8.0.0')`
+Deprecated tests become greppable. `@deprecated tag:v6.8.0` next to `it.deprecated('v6.8.0.0')`
 means the major cleanup is a search, not an audit.
 
 The trade is that a test's flag context is no longer visible in its body — you have to read the `it`
