@@ -141,6 +141,23 @@ class NavigationTreeComponentTest extends TestCase
         static::assertStringNotContainsString('<ul', $html);
     }
 
+    /**
+     * An element placed without wired data must degrade to empty output instead of failing the
+     * whole page render, matching Sw:Media:Image and Sw:Product:Listing.
+     */
+    public function testRendersNothingWhenNavigationTreeIsMissing(): void
+    {
+        $twig = static::getContainer()->get('twig');
+        static::assertInstanceOf(Environment::class, $twig);
+
+        $html = $twig
+            ->createTemplate('{{ component(\'Sw:Navigation:Tree\', { ariaLabel: \'Categories\', activeId: \'\', activePath: [], navigationMaxDepth: 3 }) }}')
+            ->render();
+
+        static::assertStringNotContainsString('<nav', $html);
+        static::assertStringNotContainsString('<ul', $html);
+    }
+
     public function testOpensLinkCategoryInNewTab(): void
     {
         $item = $this->treeItem(

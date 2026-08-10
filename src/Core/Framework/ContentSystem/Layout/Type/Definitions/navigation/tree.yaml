@@ -12,8 +12,14 @@ meta:
 properties:
   navigationTree:
     type: Shopware\Core\Content\Category\Tree\Tree
+    required: true
     title: "Navigation Tree"
     description: "Hydrated navigation tree provided by the navigation data loader."
+    # Tier B: Tree subclasses neither Entity nor EntityCollection, so the bare-string
+    # shorthand has no built-in loader branch and the loader must be named explicitly.
+    resolvedBy:
+      navigation:
+        rootId: main-navigation
 
   activeId:
     type: string
