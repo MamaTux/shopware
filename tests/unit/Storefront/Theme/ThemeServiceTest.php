@@ -254,7 +254,7 @@ class ThemeServiceTest extends TestCase
         );
 
         // the compile itself is still queued (async is on); only the assignment stays synchronous
-        $messageBus = $this->createMock(MessageBus::class);
+        $messageBus = static::createStub(MessageBus::class);
         $messageBus->method('dispatch')->willReturnCallback(static fn (object $message): Envelope => new Envelope($message));
 
         $themeService = $this->getThemeService(
