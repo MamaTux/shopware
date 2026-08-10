@@ -1,0 +1,35 @@
+{# ludtwig-ignore-file #}
+{# @sw-package framework #}
+{# @internal #}
+
+{% props
+    navigationTree,
+    navigationMaxDepth = context.salesChannel.navigationCategoryDepth,
+    expandAll = false,
+    activeId = shopware.navigation.id,
+    activePath = shopware.navigation.pathIdList,
+    ariaLabel = 'general.categories'|trans,
+%}
+
+{% set treeItems = navigationTree.tree ?? navigationTree %}
+
+{% set treeCVA = cva({
+    base: 'sw-navigation-tree',
+}) %}
+
+{% set attributeDefaults = {
+    class: treeCVA.apply({}),
+    'aria-label': ariaLabel|striptags,
+} %}
+
+{% if treeItems|length > 0 %}
+    <nav {{ attributes.defaults(attributeDefaults) }}>
+        <twig:Sw:Navigation:TreeItems
+            :navigationTree="treeItems"
+            :navigationMaxDepth="navigationMaxDepth"
+            :expandAll="expandAll"
+            :activeId="activeId"
+            :activePath="activePath"
+        />
+    </nav>
+{% endif %}

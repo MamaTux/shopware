@@ -1,0 +1,41 @@
+meta:
+  label: "Navigation Tree"
+  description: "Renders a category navigation tree with links, folders and active item highlighting."
+  icon: "regular-sitemap"
+  category: "content"
+  copilot:
+    summary: "Category navigation tree element."
+    hints:
+      - "Add a navigationTree data requirement with source 'navigation' to load the tree."
+      - "Set activeId to control which category is highlighted and expanded."
+
+properties:
+  navigationTree:
+    type: Shopware\Core\Content\Category\Tree\Tree
+    title: "Navigation Tree"
+    description: "Hydrated navigation tree provided by the navigation data loader."
+
+  activeId:
+    type: string
+    title: "Active category ID"
+    description: "Category ID highlighted as the current page. Also read by the navigation data loader via its activeProperty config."
+
+  navigationMaxDepth:
+    type: integer
+    title: "Maximum depth"
+    description: "Number of tree levels to render."
+    default: 2
+    adminUI:
+      component: "number"
+
+  expandAll:
+    type: boolean
+    title: "Expand all"
+    description: "Render all children instead of only the branch containing the active category."
+    default: false
+
+  ariaLabel:
+    type: string
+    translatable: true
+    title: "Accessible label"
+    description: "Label of the navigation landmark for assistive technology."
