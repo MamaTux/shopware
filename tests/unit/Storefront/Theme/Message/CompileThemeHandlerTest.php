@@ -46,8 +46,7 @@ class CompileThemeHandlerTest extends TestCase
         $scEntity->setUniqueIdentifier(Uuid::randomHex());
         $scEntity->setName('Test SalesChannel');
 
-        /** @var StaticEntityRepository<SalesChannelCollection> $salesChannelRep */
-        $salesChannelRep = new StaticEntityRepository([new EntityCollection([$scEntity])]);
+        $salesChannelRep = StaticEntityRepository::of(SalesChannelCollection::class, [new EntityCollection([$scEntity])]);
 
         // without the assign flag the relation must not be touched and no event dispatched
         $themeSalesChannelRep = $this->createMock(EntityRepository::class);
