@@ -1,0 +1,50 @@
+.sw-media-youtube {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+}
+
+.sw-media-youtube__video,
+.sw-media-youtube__placeholder {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: 0 none;
+}
+
+.sw-media-youtube__placeholder-image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.sw-media-youtube__backdrop {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+
+    > div {
+        background-color: rgba(var(--bs-white-rgb), 0.9);
+        padding: var(--spacer-md);
+    }
+}
+
+// Cover: drop the fixed 16/9 ratio and give the embed a larger, hero-sized area.
+// A percentage height can't be used (no definite parent height in the grid), so a
+// reasonable fixed min-height is used instead.
+.sw-media-youtube--is-cover {
+    aspect-ratio: auto;
+    min-height: 450px;
+}
+
+.sw-media-youtube__empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--bs-gray-100);
+    color: var(--bs-gray-500);
+}
