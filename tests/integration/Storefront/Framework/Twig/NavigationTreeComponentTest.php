@@ -7,6 +7,10 @@ use Shopware\Core\Content\Category\CategoryDefinition;
 use Shopware\Core\Content\Category\SalesChannel\SalesChannelCategoryEntity;
 use Shopware\Core\Content\Category\Tree\Tree;
 use Shopware\Core\Content\Category\Tree\TreeItem;
+use Shopware\Core\Framework\ContentSystem\Binding\Registry\AbstractContentSystemBindingSpecificationRegistry;
+use Shopware\Core\Framework\ContentSystem\Binding\Registry\ContentSystemBindingSpecificationRegistry;
+use Shopware\Core\Framework\ContentSystem\Binding\Specification\BindingSpecification;
+use Shopware\Core\Framework\ContentSystem\Binding\Specification\LoaderBinding;
 use Shopware\Core\Framework\Log\Package;
 use Shopware\Core\Framework\Test\TestCaseBase\IntegrationTestBehaviour;
 use Shopware\Core\Framework\Uuid\Uuid;
@@ -19,6 +23,26 @@ use Twig\Environment;
 class NavigationTreeComponentTest extends TestCase
 {
     use IntegrationTestBehaviour;
+
+    /**
+     * Without the element type's `resolvedBy` the navigation loader is never bound, the property stays
+     * empty and the element renders nothing. The canonicity test only validates bindings that exist, so
+     * this guards the binding's presence.
+     */
+    public function testElementTypeBindsTheNavigationLoader(): void
+    {
+        $registry = static::getContainer()->get(ContentSystemBindingSpecificationRegistry::class);
+        static::assertInstanceOf(AbstractContentSystemBindingSpecificationRegistry::class, $registry);
+
+        $specification = $registry->all()['core:Sw:Navigation:Tree'] ?? null;
+        static::assertInstanceOf(BindingSpecification::class, $specification);
+        static::assertSame('Sw:Navigation:Tree', $specification->type());
+
+        $binding = $specification->resolves()['navigationTree'] ?? null;
+        static::assertInstanceOf(LoaderBinding::class, $binding);
+        static::assertSame('navigation', $binding->loader);
+        static::assertSame('main-navigation', $binding->config['rootId'] ?? null);
+    }
 
     public function testRendersNestedListsWithSingleNavLandmark(): void
     {
