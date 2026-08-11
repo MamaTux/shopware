@@ -266,6 +266,16 @@ The product export now paginates products by an `autoIncrement` keyset cursor in
 
 `SalesChannelRepositoryIterator` now seeks by an `autoIncrement` keyset instead of `OFFSET` when the entity has an autoIncrement field and the criteria defines no sorting (mirroring `RepositoryIterator`); a criteria with its own sorting keeps offset iteration. `SalesChannelRepository::getDefinition()` was added for parity with `EntityRepository`.
 
+### Changing an SEO URL template regenerates the existing SEO URLs
+
+Writing the `template` field of a `seo_url_template` row now regenerates the SEO URLs of the affected route automatically, instead of leaving them on the old template until the SEO indexer is run manually. The new `SeoUrlTemplateChangeSubscriber` queues `SeoUrlTemplateIndexingMessage` on the `async` transport, and the handler walks the route's entities in batches of 250, chaining one message per batch.
+
+This affects every write path, not just Settings > Shop > SEO:
+
+- Deleting a sales-channel-specific template also regenerates, because the channel falls back to the default template. Deleting a default template does not, because there would be no template left to generate from.
+- Writes that do not change the stored `template` value do not queue anything: update commands request a DAL change set, so an idempotent Sync API push of an identical template stays inert. Inserts with an empty or `null` template are skipped as well.
+- Extensions and deployment scripts that write `seo_url_template` rows on every install or update will therefore queue a full regeneration pass for the affected route each time. Guard such writes with a value comparison if that is not intended.
+
 ## Administration
 
 ### System config forms show validation errors for the selected sales channel scope
