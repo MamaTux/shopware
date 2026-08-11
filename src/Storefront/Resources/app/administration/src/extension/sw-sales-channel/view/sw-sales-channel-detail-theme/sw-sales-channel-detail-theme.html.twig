@@ -51,6 +51,18 @@
                     <p>{{ theme.description |truncate(140) }}</p>
                 </div>
                 {% endblock %}
+
+                {% block sw_sales_channel_detail_theme_info_pending %}
+                <mt-banner
+                    v-if="pendingTheme"
+                    class="sw-sales-channel-detail-theme__info-pending"
+                    variant="info"
+                >
+                    {{ theme
+                        ? $t('sales-channel-theme.pendingAssignment.description', { liveThemeName: theme.name, pendingThemeName: pendingTheme.name })
+                        : $t('sales-channel-theme.pendingAssignment.descriptionNoLiveTheme', { pendingThemeName: pendingTheme.name }) }}
+                </mt-banner>
+                {% endblock %}
             </div>
             {% endblock %}
 

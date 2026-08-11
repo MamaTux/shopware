@@ -169,12 +169,49 @@ class CompileThemeHandlerTest extends TestCase
         $systemConfigService = static::createStub(SystemConfigService::class);
         $systemConfigService->method('getString')->willReturn(Uuid::randomHex());
 
-        // ... so this stale message must be skipped BEFORE compiling: compiling would rotate the
-        // shared per-sales-channel seed and break the currently assigned theme's CSS path
+        // ... so the stale message is skipped before compiling (no wasted work) and not applied
         $themeCompilerMock = $this->createMock(ThemeCompiler::class);
         $themeCompilerMock->expects($this->never())->method('compileTheme');
 
-        // and it must not be applied nor dispatch the event
+        $themeSalesChannelRep = $this->createMock(EntityRepository::class);
+        $themeSalesChannelRep->expects($this->never())->method('upsert');
+
+        $eventDispatcher = $this->createMock(EventDispatcherInterface::class);
+        $eventDispatcher->expects($this->never())->method('dispatch');
+
+        /** @var StaticEntityRepository<SalesChannelCollection> $salesChannelRep */
+        $salesChannelRep = new StaticEntityRepository([]);
+
+        $handler = new CompileThemeHandler(
+            $themeCompilerMock,
+            static::createStub(AbstractConfigLoader::class),
+            static::createStub(StorefrontPluginRegistry::class),
+            static::createStub(NotificationService::class),
+            $salesChannelRep,
+            static::createStub(ThemeRuntimeConfigService::class),
+            $themeSalesChannelRep,
+            $eventDispatcher,
+            $systemConfigService,
+        );
+
+        $handler($message);
+    }
+
+    public function testHandleMessageSkipsAssignmentWhenSupersededDuringCompile(): void
+    {
+        $themeId = Uuid::randomHex();
+        $context = Context::createDefaultContext();
+        $message = new CompileThemeMessage(TestDefaults::SALES_CHANNEL, $themeId, true, $context, true);
+
+        // still the latest requested theme when the handler starts, but a newer switch arrives
+        // while compiling: first check passes, the re-check after compiling fails
+        $systemConfigService = static::createStub(SystemConfigService::class);
+        $systemConfigService->method('getString')->willReturnOnConsecutiveCalls($themeId, Uuid::randomHex());
+
+        // so the theme is compiled, but the now-stale assignment is not applied
+        $themeCompilerMock = $this->createMock(ThemeCompiler::class);
+        $themeCompilerMock->expects($this->once())->method('compileTheme');
+
         $themeSalesChannelRep = $this->createMock(EntityRepository::class);
         $themeSalesChannelRep->expects($this->never())->method('upsert');
 

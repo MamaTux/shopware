@@ -50,16 +50,9 @@ final readonly class CompileThemeHandler
     {
         $message->getContext()->addState(ThemeService::STATE_NO_QUEUE);
 
-        // Skip a deferred assignment that a newer switch already superseded.
-        if ($message->isAssign()) {
-            $latestRequested = $this->systemConfigService->getString(
-                ThemeService::CONFIG_KEY_PENDING_THEME,
-                $message->getSalesChannelId()
-            );
-
-            if ($latestRequested !== '' && $latestRequested !== $message->getThemeId()) {
-                return;
-            }
+        // Skip before compiling if a newer switch already superseded this one (avoids wasted work).
+        if ($message->isAssign() && $this->isSuperseded($message)) {
+            return;
         }
 
         try {
@@ -82,8 +75,13 @@ final readonly class CompileThemeHandler
             );
 
             if ($message->isAssign()) {
-                // Compiled now, so apply the deferred assignment; until here the storefront kept
-                // serving the previous theme.
+                // Re-check after the (possibly long) compile: a newer switch may have arrived
+                // meanwhile, and it must win. The compiled files stay and are reused if reassigned.
+                if ($this->isSuperseded($message)) {
+                    return;
+                }
+
+                // Compilation succeeded — apply the deferred assignment.
                 $this->themeSalesChannelRepository->upsert([[
                     'themeId' => $message->getThemeId(),
                     'salesChannelId' => $message->getSalesChannelId(),
@@ -96,7 +94,7 @@ final readonly class CompileThemeHandler
         } catch (\Throwable $e) {
             // The API already returned and the switch is not applied. Tell the user instead of
             // failing silently, then rethrow so the messenger can retry or dead-letter it.
-            if ($message->getContext()->getScope() === Context::USER_SCOPE) {
+            if ($message->isAssign() && $message->getContext()->getScope() === Context::USER_SCOPE) {
                 $this->notificationService->createNotification(
                     [
                         'id' => Uuid::randomHex(),
@@ -132,5 +130,15 @@ final readonly class CompileThemeHandler
             ],
             $message->getContext()
         );
+    }
+
+    private function isSuperseded(CompileThemeMessage $message): bool
+    {
+        $latestRequested = $this->systemConfigService->getString(
+            ThemeService::CONFIG_KEY_PENDING_THEME,
+            $message->getSalesChannelId()
+        );
+
+        return $latestRequested !== '' && $latestRequested !== $message->getThemeId();
     }
 }

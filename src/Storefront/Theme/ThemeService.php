@@ -246,13 +246,13 @@ class ThemeService implements ResetInterface
 
     public function assignTheme(string $themeId, string $salesChannelId, Context $context, bool $skipCompile = false): bool
     {
-        // Opt-in via STATE_DEFER_ASSIGNMENT: the handler assigns the theme only after compiling
-        // it, so the storefront keeps serving the current theme. Other callers stay synchronous.
+        // Record the latest requested theme so a compile finishing out of order can detect it was
+        // superseded and not apply a stale switch. Non-silent so background workers see the update.
+        $this->configService->set(self::CONFIG_KEY_PENDING_THEME, $themeId, $salesChannelId, false);
+
+        // Opt-in via STATE_DEFER_ASSIGNMENT: the handler applies the assignment only after
+        // compiling, so the storefront keeps serving the current theme. Other callers stay sync.
         if (!$skipCompile && $context->hasState(self::STATE_DEFER_ASSIGNMENT) && $this->isAsyncCompilation($context)) {
-            // Record the latest requested theme (writes happen in request order) so the handler
-            // can skip a switch that a newer request has superseded, even if the background
-            // compilations finish out of order across concurrent workers.
-            $this->configService->set(self::CONFIG_KEY_PENDING_THEME, $themeId, $salesChannelId);
             $this->handleAsync($salesChannelId, $themeId, true, $context, true);
 
             return true;

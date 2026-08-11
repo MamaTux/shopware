@@ -38,10 +38,8 @@ class SeedingThemePathBuilder extends AbstractThemePathBuilder
 
     public function saveSeed(string $salesChannelId, string $themeId, string $seed): void
     {
-        // The seed is stored per (sales channel, theme) so that compiling one theme does not
-        // change the asset path of another theme in the same sales channel. With a shared seed a
-        // background compile of the incoming theme rotated the seed for the still-assigned
-        // outgoing theme too, making its already-compiled CSS path 404 until the switch applied.
+        // Store the seed per (sales channel, theme) so compiling one theme does not change the
+        // asset path of another theme in the same sales channel.
         $seeds = $this->readSeeds($salesChannelId);
         $seeds[$themeId] = $seed;
 
