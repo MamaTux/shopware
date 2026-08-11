@@ -135,16 +135,16 @@ describe('extension-component-sections.store', () => {
             });
         });
 
-        it('stores a valid position (1 or higher)', () => {
+        it('stores a valid priority (1 or higher)', () => {
             store.addSection({
                 component: 'card',
                 positionId: 'test-position',
                 props: { locationId: 'test-location' },
                 extensionName: 'TestExtension',
-                position: 5,
+                priority: 5,
             });
 
-            expect(store.identifier['test-position'][0].position).toBe(5);
+            expect(store.identifier['test-position'][0].priority).toBe(5);
         });
 
         it.each([
@@ -156,16 +156,16 @@ describe('extension-component-sections.store', () => {
                 'a zero',
                 0,
             ],
-        ])('ignores %s position, storing it as unset', (_label, invalidPosition) => {
+        ])('ignores %s priority, storing it as unset', (_label, invalidPriority) => {
             store.addSection({
                 component: 'card',
                 positionId: 'test-position',
                 props: { locationId: 'test-location' },
                 extensionName: 'TestExtension',
-                position: invalidPosition,
+                priority: invalidPriority,
             });
 
-            expect(store.identifier['test-position'][0].position).toBeUndefined();
+            expect(store.identifier['test-position'][0].priority).toBeUndefined();
         });
     });
 });

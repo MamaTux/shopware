@@ -247,13 +247,13 @@ describe('src/app/component/extension-api/sw-extension-component-section', () =>
             });
         }
 
-        function addSection(extensionName, position) {
+        function addSection(extensionName, priority) {
             Shopware.Store.get('extensionComponentSections').addSection({
                 component: 'card',
                 positionId: 'test-position',
                 props: { title: extensionName, locationId: extensionName },
                 extensionName,
-                position,
+                priority,
             });
         }
 
@@ -280,7 +280,7 @@ describe('src/app/component/extension-api/sw-extension-component-section', () =>
             ]);
         });
 
-        it('orders by ascending position within the same group', async () => {
+        it('orders by ascending priority within the same group', async () => {
             registerExtension('AppA', 'local');
             registerExtension('AppB', 'local');
             registerExtension('AppC', 'local');
@@ -299,7 +299,7 @@ describe('src/app/component/extension-api/sw-extension-component-section', () =>
             ]);
         });
 
-        it('renders entries without a position below those that set one', async () => {
+        it('renders entries without a priority below those that set one', async () => {
             registerExtension('AppUnset', 'local');
             registerExtension('AppPositioned', 'local');
 
@@ -315,12 +315,12 @@ describe('src/app/component/extension-api/sw-extension-component-section', () =>
             ]);
         });
 
-        it('keeps registration order for entries with an unset position (no name bias)', async () => {
+        it('keeps registration order for entries with an unset priority (no name bias)', async () => {
             registerExtension('Charlie', 'local');
             registerExtension('Alpha', 'local');
             registerExtension('Bravo', 'local');
 
-            // No position on any → all unset → ties keep their registration order, not alphabetical.
+            // No priority on any → all unset → ties keep their registration order, not alphabetical.
             addSection('Charlie');
             addSection('Alpha');
             addSection('Bravo');
@@ -335,7 +335,7 @@ describe('src/app/component/extension-api/sw-extension-component-section', () =>
             ]);
         });
 
-        it('keeps registration order for entries sharing the same position', async () => {
+        it('keeps registration order for entries sharing the same priority', async () => {
             registerExtension('First', 'local');
             registerExtension('Second', 'local');
 
@@ -345,14 +345,14 @@ describe('src/app/component/extension-api/sw-extension-component-section', () =>
             wrapper = await createWrapper();
             await flushPromises();
 
-            // Equal position → stable sort preserves insertion order (Second was registered first).
+            // Equal priority → stable sort preserves insertion order (Second was registered first).
             expect(orderedNames()).toEqual([
                 'Second',
                 'First',
             ]);
         });
 
-        it('keeps services on top even when an app has a lower position', async () => {
+        it('keeps services on top even when an app has a lower priority', async () => {
             registerExtension('ServiceExtension', 'service');
             registerExtension('AppExtension', 'local');
 
@@ -383,7 +383,7 @@ describe('src/app/component/extension-api/sw-extension-component-section', () =>
             ]);
         });
 
-        it('orders distinct positions deterministically regardless of registration order', async () => {
+        it('orders distinct priorities deterministically regardless of registration order', async () => {
             registerExtension('AppA', 'local');
             registerExtension('AppB', 'local');
             registerExtension('ServiceZ', 'service');
@@ -404,8 +404,8 @@ describe('src/app/component/extension-api/sw-extension-component-section', () =>
             addSection('AppB', 20);
             await flushPromises();
 
-            // Service first, then apps by ascending position — identical both runs because
-            // every entry has a distinct position (no reliance on registration order).
+            // Service first, then apps by ascending priority — identical both runs because
+            // every entry has a distinct priority (no reliance on registration order).
             expect(firstRun).toEqual([
                 'ServiceZ',
                 'AppA',

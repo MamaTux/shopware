@@ -103,9 +103,9 @@ export default Shopware.Component.wrapComponentConfig({
         /**
          * Sorts the sections for this position identifier:
          * 1. Sections registered by services (`sourceType === 'service'`) always render above app sections.
-         * 2. Within each group, ascending `position` (1 = topmost). Entries without a valid `position`
+         * 2. Within each group, ascending `priority` (1 = topmost). Entries without a valid `priority`
          *    render below those that set one (unset sorts last).
-         * 3. Ties (equal `position`, or both unset) keep their original registration order. The sort is
+         * 3. Ties (equal `priority`, or both unset) keep their original registration order. The sort is
          *    stable, so returning `0` preserves the array index — no extension is favoured by name.
          */
         sortSections(sections: ComponentSectionEntry[]): ComponentSectionEntry[] {
@@ -114,8 +114,8 @@ export default Shopware.Component.wrapComponentConfig({
             const isService = (entry: ComponentSectionEntry): boolean =>
                 extensionsState[entry.extensionName]?.sourceType === 'service';
 
-            // Unset positions sort last so explicitly positioned entries always win their group.
-            const positionOf = (entry: ComponentSectionEntry): number => entry.position ?? Number.MAX_SAFE_INTEGER;
+            // Unset priorities sort last so explicitly prioritized entries always win their group.
+            const priorityOf = (entry: ComponentSectionEntry): number => entry.priority ?? Number.MAX_SAFE_INTEGER;
 
             return [...sections].sort((a, b) => {
                 const serviceDiff = Number(isService(b)) - Number(isService(a));
@@ -123,7 +123,7 @@ export default Shopware.Component.wrapComponentConfig({
                     return serviceDiff;
                 }
 
-                return positionOf(a) - positionOf(b);
+                return priorityOf(a) - priorityOf(b);
             });
         },
 
