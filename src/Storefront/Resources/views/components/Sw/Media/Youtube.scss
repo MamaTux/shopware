@@ -31,12 +31,10 @@
     }
 }
 
-// Cover: drop the fixed 16/9 ratio and give the embed a larger, hero-sized area.
-// A percentage height can't be used (no definite parent height in the grid), so a
-// reasonable fixed min-height is used instead.
 .sw-media-youtube--is-cover {
     aspect-ratio: auto;
     min-height: 450px;
+    height: 100%;
 }
 
 .sw-media-youtube__empty {
