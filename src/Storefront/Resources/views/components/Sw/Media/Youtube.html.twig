@@ -13,7 +13,6 @@
     needsConfirmation = false,
     start = null,
     end = null,
-    displayMode = 'standard',
 %}
 
 {# Accept a bare video id or a full YouTube URL (watch, youtu.be, embed, shorts) and normalize to the id #}
@@ -31,15 +30,6 @@
     {# strip any trailing query string, fragment or extra path segment #}
     {% set resolvedVideoId = resolvedVideoId|split('?')|first|split('&')|first|split('#')|first|split('/')|first %}
 {% endif %}
-
-{% set youtubeCVA = cva({
-    base: 'sw-media sw-media-youtube',
-    variants: {
-        displayMode: {
-            cover: 'sw-media-youtube--is-cover',
-        },
-    },
-}) %}
 
 {% set host = advancedPrivacyMode ? 'https://www.youtube-nocookie.com/embed/' : 'https://www.youtube.com/embed/' %}
 {% set locale = app.request.locale|split('-')|first|default('en') %}
@@ -76,7 +66,7 @@
 {% set videoUrl = host ~ resolvedVideoId ~ '?' ~ (queryParams|url_encode) %}
 
 {% set attributeDefaults = {
-    class: youtubeCVA.apply({ displayMode }),
+    class: 'sw-media sw-media-youtube',
 } %}
 
 <div {{ attributes.defaults(attributeDefaults) }}>

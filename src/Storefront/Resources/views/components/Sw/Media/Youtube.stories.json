@@ -4,7 +4,7 @@
         "server": {
             "id": "Sw:Media:Youtube"
         },
-        "template": "<twig:Sw:Media:Youtube :videoId=\"videoId\" :videoTitle=\"videoTitle\" :autoplay=\"autoplay\" :loop=\"loop\" :showControls=\"showControls\" :advancedPrivacyMode=\"advancedPrivacyMode\" :needsConfirmation=\"needsConfirmation\" :start=\"start\" :end=\"end\" :displayMode=\"displayMode\" />"
+        "template": "<twig:Sw:Media:Youtube :videoId=\"videoId\" :videoTitle=\"videoTitle\" :autoplay=\"autoplay\" :loop=\"loop\" :showControls=\"showControls\" :advancedPrivacyMode=\"advancedPrivacyMode\" :needsConfirmation=\"needsConfirmation\" :start=\"start\" :end=\"end\" />"
     },
     "argTypes": {
         "videoId": { "control": "text", "description": "The YouTube video id, e.g. 'aqz-KE-bpKQ'." },
@@ -15,12 +15,7 @@
         "advancedPrivacyMode": { "control": "boolean", "description": "Use the youtube-nocookie host to prevent tracking until interaction." },
         "needsConfirmation": { "control": "boolean", "description": "Load the video only after user confirmation (cookie consent)." },
         "start": { "control": "number", "description": "Start playback at this offset in seconds (0 = from the beginning)." },
-        "end": { "control": "number", "description": "Stop playback at this offset in seconds (0 = play to the end)." },
-        "displayMode": {
-            "control": "select",
-            "options": ["standard", "cover"],
-            "description": "Rendering mode of the video."
-        }
+        "end": { "control": "number", "description": "Stop playback at this offset in seconds (0 = play to the end)." }
     },
     "stories": [
         {
@@ -34,8 +29,7 @@
                 "advancedPrivacyMode": false,
                 "needsConfirmation": false,
                 "start": 0,
-                "end": 0,
-                "displayMode": "standard"
+                "end": 0
             }
         }
     ]

@@ -15,7 +15,6 @@
     showTitle = true,
     showPortrait = true,
     color = null,
-    displayMode = 'standard',
 %}
 
 {# Accept a bare video id or a full Vimeo URL (vimeo.com/… or player.vimeo.com/video/…) and normalize to the id #}
@@ -29,15 +28,6 @@
     {# strip any query string or fragment, then take the id (last path segment) #}
     {% set resolvedVideoId = resolvedVideoId|split('?')|first|split('#')|first|split('/')|last %}
 {% endif %}
-
-{% set vimeoCVA = cva({
-    base: 'sw-media sw-media-vimeo',
-    variants: {
-        displayMode: {
-            cover: 'sw-media-vimeo--is-cover',
-        },
-    },
-}) %}
 
 {% set locale = app.request.locale|default('en-GB') %}
 
@@ -77,7 +67,7 @@
 {% set videoUrl = 'https://player.vimeo.com/video/' ~ resolvedVideoId ~ '?' ~ (queryParams|url_encode) %}
 
 {% set attributeDefaults = {
-    class: vimeoCVA.apply({ displayMode }),
+    class: 'sw-media sw-media-vimeo',
 } %}
 
 <div {{ attributes.defaults(attributeDefaults) }}>

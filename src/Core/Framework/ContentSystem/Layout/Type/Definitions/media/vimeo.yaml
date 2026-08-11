@@ -79,17 +79,6 @@ properties:
     adminUI:
       component: "color"
 
-  displayMode:
-    type: string
-    title: "Display Mode"
-    description: "Rendering mode of the video."
-    default: "standard"
-    enum:
-      - "standard"
-      - "cover"
-    adminUI:
-      component: "select"
-
   previewMedia:
     type: Shopware\Core\Content\Media\MediaEntity
     required: false
