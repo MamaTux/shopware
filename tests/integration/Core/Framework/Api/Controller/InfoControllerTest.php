@@ -241,6 +241,7 @@ class InfoControllerTest extends TestCase
             'active' => true,
             'integrationId' => $ids->get('integration'),
             'type' => 'app',
+            'sourceType' => 'local',
             'baseUrl' => 'https://example.com',
             'permissions' => [
                 'create' => ['user'],
