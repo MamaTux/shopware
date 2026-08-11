@@ -134,5 +134,38 @@ describe('extension-component-sections.store', () => {
                 extensionName: 'TestExtension2',
             });
         });
+
+        it('stores a valid position (1 or higher)', () => {
+            store.addSection({
+                component: 'card',
+                positionId: 'test-position',
+                props: { locationId: 'test-location' },
+                extensionName: 'TestExtension',
+                position: 5,
+            });
+
+            expect(store.identifier['test-position'][0].position).toBe(5);
+        });
+
+        it.each([
+            [
+                'a negative',
+                -5,
+            ],
+            [
+                'a zero',
+                0,
+            ],
+        ])('ignores %s position, storing it as unset', (_label, invalidPosition) => {
+            store.addSection({
+                component: 'card',
+                positionId: 'test-position',
+                props: { locationId: 'test-location' },
+                extensionName: 'TestExtension',
+                position: invalidPosition,
+            });
+
+            expect(store.identifier['test-position'][0].position).toBeUndefined();
+        });
     });
 });
