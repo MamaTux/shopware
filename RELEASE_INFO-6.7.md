@@ -82,6 +82,14 @@ Send the header with an authenticated Admin API request, where the behaviour is 
 
 ## Core
 
+### Force thumbnail regeneration and deletion via `--force`
+
+The `media:generate-thumbnails` command now accepts a `--force` (`-f`) option that regenerates thumbnails for all configured sizes even when a thumbnail already exists — for example after changing the thumbnail quality or sizes of a media folder. The option works with both synchronous and `--async` execution. Previously, existing thumbnails were always skipped.
+
+The `media:delete-local-thumbnails` command also accepts a new `--force` (`-f`) option that deletes all thumbnail records and files even when remote thumbnails are disabled — previously the command refused to run in that case. Note that the storefront is missing thumbnails until they are regenerated; prefer `media:generate-thumbnails --force` to replace them without such a gap.
+
+`ThumbnailService::updateThumbnails()` accepts a matching optional `$force` argument; classes overriding this method must add the parameter with Shopware 6.8 (see `UPGRADE-6.8.md`).
+
 ### GARAN commercial guarantee label and EU legal guarantee notice
 
 - Products get a new `guaranteeMonths` field for an optional commercial durability guarantee beyond the statutory two years (must be empty, or a half-year value greater than 24 months).

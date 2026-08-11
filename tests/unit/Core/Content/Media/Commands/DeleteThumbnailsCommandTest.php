@@ -34,6 +34,38 @@ class DeleteThumbnailsCommandTest extends TestCase
         static::assertStringContainsStringIgnoringLineEndings('// Deleting thumbnails is only supported when remote thumbnail is enabled.', trim($commandTester->getDisplay()));
     }
 
+    public function testExecuteWithRemoteThumbnailsDisabledAndForce(): void
+    {
+        $connection = $this->createMock(Connection::class);
+        $thumbnailRepository = $this->createMock(EntityRepository::class);
+        $command = new DeleteThumbnailsCommand($connection, $thumbnailRepository, false);
+
+        $commandTester = new CommandTester($command);
+        $commandTester->setInputs(['yes']);
+
+        $thumbnailIds = [
+            ['id' => Uuid::randomHex()],
+        ];
+        $connection->expects($this->once())
+            ->method('fetchAllAssociative')
+            ->with('SELECT LOWER(HEX(`id`)) as id FROM `media_thumbnail`')
+            ->willReturn($thumbnailIds);
+
+        $thumbnailRepository->expects($this->once())
+            ->method('delete')
+            ->with($thumbnailIds, static::isInstanceOf(Context::class));
+
+        $connection->expects($this->once())
+            ->method('executeStatement')
+            ->with('UPDATE `media` SET `thumbnails_ro` = NULL;');
+
+        $commandTester->execute(['--force' => true]);
+
+        $commandTester->assertCommandIsSuccessful();
+
+        static::assertStringContainsString('Successfully deleted all thumbnails records and thumbnails files.', $commandTester->getDisplay());
+    }
+
     public function testExecuteWithRemoteThumbnailsEnabled(): void
     {
         $connection = $this->createMock(Connection::class);

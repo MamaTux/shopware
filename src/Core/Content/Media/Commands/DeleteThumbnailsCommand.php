@@ -10,13 +10,14 @@ use Shopware\Core\Framework\Log\Package;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
 #[Package('discovery')]
 #[AsCommand(
     name: 'media:delete-local-thumbnails',
-    description: 'Deletes all physical media thumbnails when remote thumbnails is enabled.',
+    description: 'Deletes all media thumbnail records and physical thumbnail files.',
 )]
 class DeleteThumbnailsCommand extends Command
 {
@@ -36,12 +37,25 @@ class DeleteThumbnailsCommand extends Command
     /**
      * {@inheritdoc}
      */
+    protected function configure(): void
+    {
+        $this->addOption(
+            'force',
+            'f',
+            InputOption::VALUE_NONE,
+            'Delete thumbnails even when remote thumbnails are disabled. The storefront will be missing thumbnails until they are regenerated'
+        );
+    }
+
+    /**
+     * {@inheritdoc}
+     */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
 
-        if (!$this->remoteThumbnailsEnable) {
-            $io->comment('Deleting thumbnails is only supported when remote thumbnail is enabled.');
+        if (!$this->remoteThumbnailsEnable && !$input->getOption('force')) {
+            $io->comment('Deleting thumbnails is only supported when remote thumbnail is enabled. Use the --force option to delete them anyway, or "media:generate-thumbnails --force" to regenerate them in place.');
 
             return self::FAILURE;
         }
