@@ -56,6 +56,18 @@ test(
         });
 
         await test.step('Verify that customer can access the digital product.', async () => {
+            // As of 6.8 (feature FLOW_EXECUTION_AFTER_BUSINESS_PROCESS) the "grant download access"
+            // flow runs AFTER the paid request instead of inline, so the Download link (rendered
+            // only once access is granted) may be absent right after checkout. Reload the order
+            // overview and open the details until the link shows up, otherwise the download step
+            // times out (see nightly-major failures).
+            await ShopCustomer.expects(async () => {
+                await ShopCustomer.goesTo(StorefrontAccountOrder.url());
+                await ShopCustomer.presses(StorefrontAccountOrder.orderExpandButton);
+                await ShopCustomer.expects(StorefrontAccountOrder.digitalProductDownloadButton).toBeVisible();
+            }).toPass({ timeout: 30_000 });
+
+            // Reload once more so the download task opens the order details from a clean state.
             await ShopCustomer.goesTo(StorefrontAccountOrder.url());
 
             // Download the digital product and check if the content is equal to what was uploaded.
